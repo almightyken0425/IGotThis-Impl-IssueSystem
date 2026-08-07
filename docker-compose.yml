@@ -1,0 +1,36 @@
+# IGotThis 本機開發用資料庫。
+#
+# 現況：本機尚未安裝 Docker，本檔為待環境就緒的預備設定，尚未實跑驗證。
+# 環境就緒後的起手式：
+#   cp .env.example .env
+#   docker compose up -d db
+#   docker compose ps
+#
+# 應用本身不入 compose，維持在宿主機由 npm run dev 啟動，
+# 只有 PostgreSQL 走容器，避免 node_modules 跨檔案系統的效能損耗。
+
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: igotthis-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-igotthis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_local_only}
+      POSTGRES_DB: ${POSTGRES_DB:-igotthis}
+      # 統一 UTC，時區換算全交給應用層
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-igotthis} -d ${POSTGRES_DB:-igotthis}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+    name: igotthis-pgdata

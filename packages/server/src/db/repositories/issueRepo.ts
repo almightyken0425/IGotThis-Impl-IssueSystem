@@ -1,0 +1,530 @@
+import type { Issue, RollupMode } from '../../domain/index.js';
+import { getPool } from '../pool.js';
+import type { Executor } from './executor.js';
+import { run, runOne } from './executor.js';
+import type {
+  IssueTypeDefinition,
+  ResolutionOption,
+  StoredFieldValue,
+  WorkflowState,
+  WorkflowTransition,
+} from './types.js';
+
+// 工單 repository。
+//
+// 角色：Issues、IssueTypeDefinitions、WorkflowStates / WorkflowTransitions、
+//       ResolutionOptions 的讀寫，與工單欄位單值的存取。
+// 邊界：
+// - 唯一碰工單相關表的一層；SQL 不外流。
+// - 工單實體沿用 domain 的 `Issue`；型別與流程類實體沿用本層 types。
+// - 每個讀寫都帶 companyId 租戶鍵，跨 Company 的資料互不可見。
+// - jsonb 欄位（欄位組配方、必填欄位、欄位值）寫入前序列化、讀出後即為解析值。
+
+// ============================================================
+// row 型別與對映
+// ============================================================
+
+interface IssueRow {
+  id: string;
+  company_id: string;
+  issue_set_id: string;
+  issue_type_id: string;
+  issue_key: string;
+}
+interface IssueTypeRow {
+  id: string;
+  company_id: string;
+  name: string;
+  label: string;
+  field_sets: string[];
+  system: boolean;
+}
+interface WorkflowStateRow {
+  company_id: string;
+  issue_type_id: string;
+  name: string;
+  sort_order: number;
+  is_initial: boolean;
+  is_terminal: boolean;
+}
+interface WorkflowTransitionRow {
+  company_id: string;
+  issue_type_id: string;
+  from_state: string;
+  to_state: string;
+  required_role: string | null;
+  required_fields: string[];
+}
+interface ResolutionOptionRow {
+  company_id: string;
+  issue_type_id: string;
+  value: string;
+  system: boolean;
+}
+interface FieldValueRow {
+  company_id: string;
+  issue_id: string;
+  field_name: string;
+  value: unknown;
+  rollup_mode: RollupMode | null;
+}
+
+function toIssue(row: IssueRow): Issue {
+  return {
+    id: row.id,
+    companyId: row.company_id,
+    issueSetId: row.issue_set_id,
+    issueTypeId: row.issue_type_id,
+    issueKey: row.issue_key,
+  };
+}
+function toIssueType(row: IssueTypeRow): IssueTypeDefinition {
+  return {
+    id: row.id,
+    companyId: row.company_id,
+    name: row.name,
+    label: row.label,
+    fieldSets: row.field_sets,
+    system: row.system,
+  };
+}
+function toWorkflowState(row: WorkflowStateRow): WorkflowState {
+  return {
+    companyId: row.company_id,
+    issueTypeId: row.issue_type_id,
+    name: row.name,
+    sortOrder: row.sort_order,
+    isInitial: row.is_initial,
+    isTerminal: row.is_terminal,
+  };
+}
+function toWorkflowTransition(row: WorkflowTransitionRow): WorkflowTransition {
+  return {
+    companyId: row.company_id,
+    issueTypeId: row.issue_type_id,
+    fromState: row.from_state,
+    toState: row.to_state,
+    requiredRole: row.required_role,
+    requiredFields: row.required_fields,
+  };
+}
+function toResolutionOption(row: ResolutionOptionRow): ResolutionOption {
+  return {
+    companyId: row.company_id,
+    issueTypeId: row.issue_type_id,
+    value: row.value,
+    system: row.system,
+  };
+}
+function toFieldValue(row: FieldValueRow): StoredFieldValue {
+  return {
+    companyId: row.company_id,
+    issueId: row.issue_id,
+    fieldName: row.field_name,
+    value: row.value,
+    rollupMode: row.rollup_mode,
+  };
+}
+
+// ============================================================
+// Issues
+// ============================================================
+
+/** 建立工單；`issueKey` 由呼叫端以 domain 的 assignIssueKey 產生後傳入。 */
+export async function createIssue(input: Issue, exec: Executor = getPool()): Promise<Issue> {
+  const row = await runOne<IssueRow>(
+    exec,
+    `INSERT INTO issues (id, company_id, issue_set_id, issue_type_id, issue_key)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, company_id, issue_set_id, issue_type_id, issue_key`,
+    [input.id, input.companyId, input.issueSetId, input.issueTypeId, input.issueKey],
+  );
+  return toIssue(row!);
+}
+
+export async function getIssue(
+  companyId: string,
+  id: string,
+  exec: Executor = getPool(),
+): Promise<Issue | undefined> {
+  const row = await runOne<IssueRow>(
+    exec,
+    `SELECT id, company_id, issue_set_id, issue_type_id, issue_key
+     FROM issues WHERE company_id = $1 AND id = $2`,
+    [companyId, id],
+  );
+  return row ? toIssue(row) : undefined;
+}
+
+export async function getIssueByKey(
+  companyId: string,
+  issueKey: string,
+  exec: Executor = getPool(),
+): Promise<Issue | undefined> {
+  const row = await runOne<IssueRow>(
+    exec,
+    `SELECT id, company_id, issue_set_id, issue_type_id, issue_key
+     FROM issues WHERE company_id = $1 AND issue_key = $2`,
+    [companyId, issueKey],
+  );
+  return row ? toIssue(row) : undefined;
+}
+
+export async function listIssuesByIssueSet(
+  companyId: string,
+  issueSetId: string,
+  exec: Executor = getPool(),
+): Promise<Issue[]> {
+  const rows = await run<IssueRow>(
+    exec,
+    `SELECT id, company_id, issue_set_id, issue_type_id, issue_key
+     FROM issues WHERE company_id = $1 AND issue_set_id = $2 ORDER BY issue_key`,
+    [companyId, issueSetId],
+  );
+  return rows.map(toIssue);
+}
+
+/** 將工單移至其他工單集；編號 issueKey 保留原號不變。 */
+export async function moveIssue(
+  companyId: string,
+  id: string,
+  issueSetId: string,
+  exec: Executor = getPool(),
+): Promise<Issue | undefined> {
+  const row = await runOne<IssueRow>(
+    exec,
+    `UPDATE issues SET issue_set_id = $3 WHERE company_id = $1 AND id = $2
+     RETURNING id, company_id, issue_set_id, issue_type_id, issue_key`,
+    [companyId, id, issueSetId],
+  );
+  return row ? toIssue(row) : undefined;
+}
+
+export async function deleteIssue(
+  companyId: string,
+  id: string,
+  exec: Executor = getPool(),
+): Promise<boolean> {
+  const rows = await run<IssueRow>(
+    exec,
+    'DELETE FROM issues WHERE company_id = $1 AND id = $2 RETURNING id',
+    [companyId, id],
+  );
+  return rows.length > 0;
+}
+
+// ============================================================
+// IssueTypeDefinitions
+// ============================================================
+
+export async function createIssueType(
+  input: IssueTypeDefinition,
+  exec: Executor = getPool(),
+): Promise<IssueTypeDefinition> {
+  const row = await runOne<IssueTypeRow>(
+    exec,
+    `INSERT INTO issue_type_definitions (id, company_id, name, label, field_sets, system)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, company_id, name, label, field_sets, system`,
+    [input.id, input.companyId, input.name, input.label, JSON.stringify(input.fieldSets), input.system],
+  );
+  return toIssueType(row!);
+}
+
+export async function getIssueType(
+  companyId: string,
+  id: string,
+  exec: Executor = getPool(),
+): Promise<IssueTypeDefinition | undefined> {
+  const row = await runOne<IssueTypeRow>(
+    exec,
+    `SELECT id, company_id, name, label, field_sets, system
+     FROM issue_type_definitions WHERE company_id = $1 AND id = $2`,
+    [companyId, id],
+  );
+  return row ? toIssueType(row) : undefined;
+}
+
+export async function getIssueTypeByName(
+  companyId: string,
+  name: string,
+  exec: Executor = getPool(),
+): Promise<IssueTypeDefinition | undefined> {
+  const row = await runOne<IssueTypeRow>(
+    exec,
+    `SELECT id, company_id, name, label, field_sets, system
+     FROM issue_type_definitions WHERE company_id = $1 AND name = $2`,
+    [companyId, name],
+  );
+  return row ? toIssueType(row) : undefined;
+}
+
+export async function listIssueTypes(
+  companyId: string,
+  exec: Executor = getPool(),
+): Promise<IssueTypeDefinition[]> {
+  const rows = await run<IssueTypeRow>(
+    exec,
+    `SELECT id, company_id, name, label, field_sets, system
+     FROM issue_type_definitions WHERE company_id = $1 ORDER BY name`,
+    [companyId],
+  );
+  return rows.map(toIssueType);
+}
+
+/** 更新工單型別的顯示名稱與欄位組配方；識別名稱 name 與系統旗標不動。 */
+export async function updateIssueType(
+  companyId: string,
+  id: string,
+  patch: { readonly label: string; readonly fieldSets: readonly string[] },
+  exec: Executor = getPool(),
+): Promise<IssueTypeDefinition | undefined> {
+  const row = await runOne<IssueTypeRow>(
+    exec,
+    `UPDATE issue_type_definitions SET label = $3, field_sets = $4
+     WHERE company_id = $1 AND id = $2
+     RETURNING id, company_id, name, label, field_sets, system`,
+    [companyId, id, patch.label, JSON.stringify(patch.fieldSets)],
+  );
+  return row ? toIssueType(row) : undefined;
+}
+
+export async function deleteIssueType(
+  companyId: string,
+  id: string,
+  exec: Executor = getPool(),
+): Promise<boolean> {
+  const rows = await run<IssueTypeRow>(
+    exec,
+    'DELETE FROM issue_type_definitions WHERE company_id = $1 AND id = $2 RETURNING id',
+    [companyId, id],
+  );
+  return rows.length > 0;
+}
+
+// ============================================================
+// WorkflowStates
+// ============================================================
+
+export type WorkflowStateInput = Omit<WorkflowState, 'companyId' | 'issueTypeId'>;
+
+export async function listWorkflowStates(
+  companyId: string,
+  issueTypeId: string,
+  exec: Executor = getPool(),
+): Promise<WorkflowState[]> {
+  const rows = await run<WorkflowStateRow>(
+    exec,
+    `SELECT company_id, issue_type_id, name, sort_order, is_initial, is_terminal
+     FROM workflow_states WHERE company_id = $1 AND issue_type_id = $2 ORDER BY sort_order`,
+    [companyId, issueTypeId],
+  );
+  return rows.map(toWorkflowState);
+}
+
+/**
+ * 整批取代某工單型別的流程狀態：先清空、再逐筆插入。
+ * 兩步須在同一交易內，`exec` 須為交易中的連線。
+ */
+export async function replaceWorkflowStates(
+  companyId: string,
+  issueTypeId: string,
+  states: readonly WorkflowStateInput[],
+  exec: Executor,
+): Promise<WorkflowState[]> {
+  await run(
+    exec,
+    'DELETE FROM workflow_states WHERE company_id = $1 AND issue_type_id = $2',
+    [companyId, issueTypeId],
+  );
+  for (const s of states) {
+    await run(
+      exec,
+      `INSERT INTO workflow_states
+         (company_id, issue_type_id, name, sort_order, is_initial, is_terminal)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [companyId, issueTypeId, s.name, s.sortOrder, s.isInitial, s.isTerminal],
+    );
+  }
+  return listWorkflowStates(companyId, issueTypeId, exec);
+}
+
+// ============================================================
+// WorkflowTransitions
+// ============================================================
+
+export type WorkflowTransitionInput = Omit<WorkflowTransition, 'companyId' | 'issueTypeId'>;
+
+export async function listWorkflowTransitions(
+  companyId: string,
+  issueTypeId: string,
+  exec: Executor = getPool(),
+): Promise<WorkflowTransition[]> {
+  const rows = await run<WorkflowTransitionRow>(
+    exec,
+    `SELECT company_id, issue_type_id, from_state, to_state, required_role, required_fields
+     FROM workflow_transitions WHERE company_id = $1 AND issue_type_id = $2
+     ORDER BY from_state, to_state`,
+    [companyId, issueTypeId],
+  );
+  return rows.map(toWorkflowTransition);
+}
+
+/**
+ * 整批取代某工單型別的流程轉換：先清空、再逐筆插入。
+ * 轉換的 from/to 對流程狀態有外鍵，取代狀態與轉換時須同交易且先狀態後轉換。
+ */
+export async function replaceWorkflowTransitions(
+  companyId: string,
+  issueTypeId: string,
+  transitions: readonly WorkflowTransitionInput[],
+  exec: Executor,
+): Promise<WorkflowTransition[]> {
+  await run(
+    exec,
+    'DELETE FROM workflow_transitions WHERE company_id = $1 AND issue_type_id = $2',
+    [companyId, issueTypeId],
+  );
+  for (const t of transitions) {
+    await run(
+      exec,
+      `INSERT INTO workflow_transitions
+         (company_id, issue_type_id, from_state, to_state, required_role, required_fields)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        companyId,
+        issueTypeId,
+        t.fromState,
+        t.toState,
+        t.requiredRole,
+        JSON.stringify(t.requiredFields),
+      ],
+    );
+  }
+  return listWorkflowTransitions(companyId, issueTypeId, exec);
+}
+
+// ============================================================
+// ResolutionOptions
+// ============================================================
+
+export type ResolutionOptionInput = Omit<ResolutionOption, 'companyId' | 'issueTypeId'>;
+
+export async function listResolutionOptions(
+  companyId: string,
+  issueTypeId: string,
+  exec: Executor = getPool(),
+): Promise<ResolutionOption[]> {
+  const rows = await run<ResolutionOptionRow>(
+    exec,
+    `SELECT company_id, issue_type_id, value, system
+     FROM resolution_options WHERE company_id = $1 AND issue_type_id = $2 ORDER BY value`,
+    [companyId, issueTypeId],
+  );
+  return rows.map(toResolutionOption);
+}
+
+/** 整批取代某工單型別的結案原因選項：先清空、再逐筆插入。 */
+export async function replaceResolutionOptions(
+  companyId: string,
+  issueTypeId: string,
+  options: readonly ResolutionOptionInput[],
+  exec: Executor,
+): Promise<ResolutionOption[]> {
+  await run(
+    exec,
+    'DELETE FROM resolution_options WHERE company_id = $1 AND issue_type_id = $2',
+    [companyId, issueTypeId],
+  );
+  for (const o of options) {
+    await run(
+      exec,
+      `INSERT INTO resolution_options (company_id, issue_type_id, value, system)
+       VALUES ($1, $2, $3, $4)`,
+      [companyId, issueTypeId, o.value, o.system],
+    );
+  }
+  return listResolutionOptions(companyId, issueTypeId, exec);
+}
+
+// ============================================================
+// 工單欄位單值 (IssueFieldValues)
+// ============================================================
+
+export async function listFieldValues(
+  companyId: string,
+  issueId: string,
+  exec: Executor = getPool(),
+): Promise<StoredFieldValue[]> {
+  const rows = await run<FieldValueRow>(
+    exec,
+    `SELECT company_id, issue_id, field_name, value, rollup_mode
+     FROM issue_field_values WHERE company_id = $1 AND issue_id = $2 ORDER BY field_name`,
+    [companyId, issueId],
+  );
+  return rows.map(toFieldValue);
+}
+
+export async function getFieldValue(
+  companyId: string,
+  issueId: string,
+  fieldName: string,
+  exec: Executor = getPool(),
+): Promise<StoredFieldValue | undefined> {
+  const row = await runOne<FieldValueRow>(
+    exec,
+    `SELECT company_id, issue_id, field_name, value, rollup_mode
+     FROM issue_field_values WHERE company_id = $1 AND issue_id = $2 AND field_name = $3`,
+    [companyId, issueId, fieldName],
+  );
+  return row ? toFieldValue(row) : undefined;
+}
+
+/**
+ * 寫入或覆蓋工單的單一欄位值。
+ *
+ * 以 (issue_id, field_name) 為主鍵做 upsert；`value` 以 jsonb 儲存、不得為 undefined。
+ * `rollupMode` 僅可彙總欄位使用，其餘傳 null。
+ */
+export async function setFieldValue(
+  input: {
+    readonly companyId: string;
+    readonly issueId: string;
+    readonly fieldName: string;
+    readonly value: unknown;
+    readonly rollupMode?: RollupMode | null;
+  },
+  exec: Executor = getPool(),
+): Promise<StoredFieldValue> {
+  const row = await runOne<FieldValueRow>(
+    exec,
+    `INSERT INTO issue_field_values (company_id, issue_id, field_name, value, rollup_mode)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (issue_id, field_name)
+     DO UPDATE SET value = EXCLUDED.value, rollup_mode = EXCLUDED.rollup_mode
+     RETURNING company_id, issue_id, field_name, value, rollup_mode`,
+    [
+      input.companyId,
+      input.issueId,
+      input.fieldName,
+      JSON.stringify(input.value),
+      input.rollupMode ?? null,
+    ],
+  );
+  return toFieldValue(row!);
+}
+
+export async function deleteFieldValue(
+  companyId: string,
+  issueId: string,
+  fieldName: string,
+  exec: Executor = getPool(),
+): Promise<boolean> {
+  const rows = await run<FieldValueRow>(
+    exec,
+    `DELETE FROM issue_field_values
+     WHERE company_id = $1 AND issue_id = $2 AND field_name = $3 RETURNING field_name`,
+    [companyId, issueId, fieldName],
+  );
+  return rows.length > 0;
+}

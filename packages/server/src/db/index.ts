@@ -7,6 +7,9 @@
 // - 交易邊界由本層開關，api 只宣告要不要在同一交易內
 // - domain 不得 import 本層，依賴方向單向由外向內
 //
-// 待接：連線池建立、migration 執行器、各聚合的 repository。
+export { createPool, getPool, closePool, registerGracefulShutdown } from './pool.js';
+export { query, queryOne, withTransaction } from './client.js';
+export { applyMigrations } from './migrate.js';
 
-export {};
+// 各聚合的 repository：手寫 SQL、對映 snake_case 欄名到 domain 的 camelCase。
+export * from './repositories/index.js';

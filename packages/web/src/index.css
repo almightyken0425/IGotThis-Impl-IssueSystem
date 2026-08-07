@@ -1,0 +1,22 @@
+/* 全域重置 · 只管版面結構，不承載任何視覺值
+ *
+ * 色彩、字級、間距一律走 theme token，由 React 以 inline style 施加；
+ * 本檔刻意不出現顏色與字體，避免視覺標準漏出 design git 的仲裁範圍。
+ * ThemeProvider 另外會在 <html> 上寫 color-scheme，捲軸與原生控件跟著切主題。
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+}

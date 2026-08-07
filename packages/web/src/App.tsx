@@ -1,14 +1,20 @@
-// 骨架期最小頁面，只證明建置鏈與掛載跑得通。
+// 應用根節點
 //
-// 刻意不寫任何顏色、字級、間距的字面值：
-// 視覺標準由 design git 仲裁，theme 目錄接上後才進場。
-// 見同 package 的 theme 目錄說明。
+// 只做兩件事：把整棵樹包進 ThemeProvider，再掛上路由。
+// 版面與導覽在 AppShell、畫面在 screens/，本檔不承載任何視覺值。
+//
+// 主題選擇的持久化尚未接：ThemeProvider 收 initialThemeId 與 onThemeChange 兩個
+// 接口，等使用者偏好設定落地後由此灌入與寫出。目前每次載入都從 light 起算。
+
+import { RouterProvider } from 'react-router';
+
+import { router } from './app/routes';
+import { ThemeProvider } from './theme';
 
 export function App() {
   return (
-    <main>
-      <h1>IGotThis</h1>
-      <p>工單系統前端骨架。畫面實作待 design token 接上後開工。</p>
-    </main>
+    <ThemeProvider>
+      <RouterProvider router={router} />
+    </ThemeProvider>
   );
 }

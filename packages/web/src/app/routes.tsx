@@ -8,9 +8,11 @@
 
 import { createBrowserRouter, Navigate } from 'react-router';
 
+import { RequireAuth } from '../auth/RequireAuth';
 import { DevOrderScreen } from '../screens/DevOrderScreen';
 import { KanbanScreen } from '../screens/KanbanScreen';
 import { ListScreen } from '../screens/ListScreen';
+import { LoginScreen } from '../screens/LoginScreen';
 import { AppShell } from './AppShell';
 
 export interface NavItem {
@@ -27,16 +29,24 @@ export const NAV_ITEMS: readonly NavItem[] = [
 const DEFAULT_PATH = '/list';
 
 export const router = createBrowserRouter([
+  // 登入頁在殼外、不設守衛，未登入者的落腳處。
+  { path: '/login', element: <LoginScreen /> },
+  // 其餘全掛認證守衛：未登入一律導向 /login。
   {
-    path: '/',
-    element: <AppShell />,
+    element: <RequireAuth />,
     children: [
-      { index: true, element: <Navigate to={DEFAULT_PATH} replace /> },
-      { path: 'list', element: <ListScreen /> },
-      { path: 'kanban', element: <KanbanScreen /> },
-      { path: 'dev-order', element: <DevOrderScreen /> },
-      // 未知路徑退回預設檢視，不留白畫面。
-      { path: '*', element: <Navigate to={DEFAULT_PATH} replace /> },
+      {
+        path: '/',
+        element: <AppShell />,
+        children: [
+          { index: true, element: <Navigate to={DEFAULT_PATH} replace /> },
+          { path: 'list', element: <ListScreen /> },
+          { path: 'kanban', element: <KanbanScreen /> },
+          { path: 'dev-order', element: <DevOrderScreen /> },
+          // 未知路徑退回預設檢視，不留白畫面。
+          { path: '*', element: <Navigate to={DEFAULT_PATH} replace /> },
+        ],
+      },
     ],
   },
 ]);

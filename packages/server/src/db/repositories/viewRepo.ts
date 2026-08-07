@@ -122,6 +122,27 @@ export async function updateViewColumnConfig(
   );
 }
 
+/**
+ * 刪一張檢視，連同其排序項；限同 Company，回是否真的刪到。
+ * 先清 view_sort_entries 再刪 views（前者對後者有外鍵）；
+ * 兩步須原子完成，`exec` 應為交易中的連線。
+ */
+export async function deleteView(
+  exec: Executor,
+  companyId: string,
+  id: string,
+): Promise<boolean> {
+  await exec.query(
+    `DELETE FROM view_sort_entries WHERE company_id = $1 AND view_id = $2`,
+    [companyId, id],
+  );
+  const result = await exec.query(
+    `DELETE FROM views WHERE company_id = $1 AND id = $2 RETURNING id`,
+    [companyId, id],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 /** 更新檢視的篩選條件。 */
 export async function updateViewFilterConfig(
   exec: Executor,

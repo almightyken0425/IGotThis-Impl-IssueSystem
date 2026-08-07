@@ -11,6 +11,7 @@
 
 import { NavLink, Outlet } from 'react-router';
 
+import { useAuth } from '../auth/AuthContext';
 import { Button } from '../components/controls';
 import {
   BORDER_WIDTH,
@@ -101,6 +102,7 @@ function NavItem({ theme, to, label }: NavItemProps) {
 
 export function AppShell() {
   const { theme, themeId, toggleTheme } = useTheme();
+  const { account, logout } = useAuth();
 
   return (
     <div
@@ -150,12 +152,29 @@ export function AppShell() {
           ))}
         </nav>
 
-        <Button
-          variant="secondary"
-          fullWidth
-          label={themeId === 'dark' ? '切換為淺色主題' : '切換為深色主題'}
-          onClick={toggleTheme}
-        />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: S.NAV_GAP }}>
+          {account !== null && (
+            <span
+              style={{
+                ...typeStyle(S.BRAND_META_TYPE),
+                color: theme.text.tertiary,
+                padding: `0 ${S.NAV_ITEM_PADDING_X}px`,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {account.name}
+            </span>
+          )}
+          <Button
+            variant="secondary"
+            fullWidth
+            label={themeId === 'dark' ? '切換為淺色主題' : '切換為深色主題'}
+            onClick={toggleTheme}
+          />
+          <Button variant="ghost" fullWidth label="登出" onClick={() => void logout()} />
+        </div>
       </aside>
 
       <main style={{ flex: 1, minWidth: 0, overflow: 'auto' }}>

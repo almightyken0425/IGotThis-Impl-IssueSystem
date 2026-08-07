@@ -1,141 +1,97 @@
 // KanbanScreen · 看板畫面
 //
-// 角色：依 Status 分欄呈現工單，拖曳卡片完成狀態轉換。欄集合不隨結案原因
-// 增加——結案原因是拖入終止欄時的一次選擇，不開欄。
+// 角色：依 Status 分欄呈現工單，拖曳卡片完成狀態轉換。欄集合由工作區各工單型別
+// 的流程狀態聯集產出，不隨資料增減。
 //
 // 來源：design git 的 `30_screens/no2_kanban_screen/no2_kanban_screen.jsx`。
 // 對側 spec：no3_product_specs/no1_issue_system/no2_screens/no2_kanban_screen.md
-// 引用的 Logic：applyViewFilter、buildKanbanColumns、filterViewByPermission、
-//               getResolutionOptions、changeIssueStatus
 //
-// 消費元件：
-//   gantt/Toolbar                     工具列容器，左中右三區
-//   controls/Select、TextInput、Button、Chip
-//   data/KanbanColumn、KanbanCard、FilterNotice、EmptyState
-//   本檔私有的 KanbanDropSlot、KanbanResolutionPrompt 在 internal.tsx
+// 資料來源：改接真 API。欄由 /api/views/kanban-columns 取回，卡片由
+// /api/workspace/issues 取回並依 status 欄位分欄；拖入他欄即 PATCH 該工單 status。
+// design 的假資料、結案原因浮層與多資料來源不搬——單一工作區、狀態即欄。
 //
-// 與 design 的差異：
-//   1. variant 不搬。canvas 的 dragging 與 resolution 是擺好的快照，
-//      app 內兩者都由真實拖放產生：拖起卡片就出殘影與放置槽，
-//      放進終止欄就跳結案原因浮層
-//   2. 拖放走瀏覽器原生 HTML5 drag and drop。KanbanCard 已備 draggable 與
-//      onDragStart / onDragEnd，KanbanColumn 已備 onDragOver / onDrop，
-//      畫面只補狀態機
-//   3. 篩選 chip 改為真實狀態的投影。design 的兩顆 chip 是示意標籤、移除後
-//      什麼也不會變；此處 chip 對應搜尋字與非預設資料來源，移除即清掉該條件
+// 消費元件：gantt/Toolbar、controls（TextInput / Button / Chip）、
+//           data（KanbanColumn / KanbanCard / EmptyState），本檔私有 KanbanDropSlot。
 
 import { useCallback, useMemo, useState } from 'react';
 import type { DragEvent } from 'react';
 
-import { Button, Chip, Select, TextInput } from '../../components/controls';
-import { EmptyState, FilterNotice, KanbanCard, KanbanColumn } from '../../components/data';
+import { workspaceApi } from '../../api';
+import type { WorkspaceContext, WorkspaceIssue } from '../../api';
+import { Button, Chip, TextInput } from '../../components/controls';
+import { EmptyState, KanbanCard, KanbanColumn } from '../../components/data';
+import type { DueTone } from '../../components/data';
 import { Toolbar } from '../../components/gantt';
-import { FONT_FAMILY, useTheme, withAlpha } from '../../theme';
+import { useAsync } from '../../hooks/useAsync';
+import { FONT_FAMILY, useTheme } from '../../theme';
 import { typeStyle } from '../typeStyle';
-import {
-  buildKanbanColumns,
-  KANBAN_DEFAULT_SOURCE,
-  KANBAN_ISSUES,
-  KANBAN_PERMISSION_FILTERED,
-  KANBAN_RESOLUTIONS,
-  KANBAN_SOURCES,
-  kanbanSourceById,
-  resolutionById,
-} from './fixtures';
-import type { KanbanIssue, KanbanSourceId } from './fixtures';
-import { KanbanDropSlot, KanbanResolutionPrompt } from './internal';
+import { KanbanDropSlot } from './internal';
 import { KANBAN_SCREEN_TOKENS } from './tokens';
 
 const K = KANBAN_SCREEN_TOKENS;
 
-/** 拖入終止欄後、等結案原因的那一次放置。取消則什麼也不寫。 */
-interface PendingClose {
-  readonly issueKey: string;
-  readonly columnId: string;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+interface DueDisplay {
+  readonly label: string;
+  readonly tone?: DueTone;
 }
 
-interface ActiveFilterChip {
-  readonly id: string;
-  readonly label: string;
-  readonly value: string;
-  readonly onRemove: () => void;
+/** ISO 到期日轉卡片顯示。過期 overdue、七日內 soon。 */
+function dueDisplay(iso: string | null): DueDisplay | undefined {
+  if (iso === null) return undefined;
+  const target = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(target.getTime())) return { label: iso };
+  const label = `${String(target.getMonth() + 1).padStart(2, '0')}/${String(target.getDate()).padStart(2, '0')}`;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diff = Math.round((target.getTime() - today.getTime()) / DAY_MS);
+  if (diff < 0) return { label, tone: 'overdue' };
+  if (diff <= 7) return { label, tone: 'soon' };
+  return { label };
+}
+
+interface KanbanData {
+  readonly context: WorkspaceContext;
+  readonly columns: readonly string[];
+  readonly issues: readonly WorkspaceIssue[];
 }
 
 export function KanbanScreen() {
   const { theme } = useTheme();
 
-  // 工單本體。狀態轉換直接寫回這裡，接 API 後改為 changeIssueStatus 的回傳。
-  const [issues, setIssues] = useState<readonly KanbanIssue[]>(KANBAN_ISSUES);
-  const [source, setSource] = useState<KanbanSourceId>(KANBAN_DEFAULT_SOURCE);
-  const [search, setSearch] = useState('');
+  const fetcher = useCallback(async (): Promise<KanbanData> => {
+    const context = await workspaceApi.getWorkspace();
+    const [columns, issues] = await Promise.all([
+      workspaceApi.getKanbanColumns(),
+      workspaceApi.listIssues(),
+    ]);
+    return { context, columns, issues };
+  }, []);
+  const { data, loading, error, reload } = useAsync(fetcher);
 
-  // 拖放狀態機。draggingKey 為被抬起的卡、dropColumnId 為游標當下所在的欄。
+  const [search, setSearch] = useState('');
   const [draggingKey, setDraggingKey] = useState<string | null>(null);
   const [dropColumnId, setDropColumnId] = useState<string | null>(null);
-  const [pendingClose, setPendingClose] = useState<PendingClose | null>(null);
+  const [pendingKey, setPendingKey] = useState<string | null>(null);
 
-  const sourceOption = kanbanSourceById(source);
+  const columns = data?.columns ?? [];
+  const issues = data?.issues ?? [];
 
-  // 欄集合與欄序由 buildKanbanColumns 產出；資料來源涉及的型別是唯一輸入。
-  const columns = useMemo(() => buildKanbanColumns(sourceOption.types), [sourceOption.types]);
+  const terminalSet = useMemo(
+    () => new Set((data?.context.statuses ?? []).filter((s) => s.isTerminal).map((s) => s.name)),
+    [data?.context.statuses],
+  );
 
   const visibleIssues = useMemo(() => {
     const term = search.trim().toLocaleLowerCase();
-    return issues.filter((issue) => {
-      if (!sourceOption.types.includes(issue.type)) return false;
-      if (term === '') return true;
-      return (
+    if (term === '') return issues;
+    return issues.filter(
+      (issue) =>
         issue.key.toLocaleLowerCase().includes(term) ||
-        issue.title.toLocaleLowerCase().includes(term)
-      );
-    });
-  }, [issues, sourceOption.types, search]);
-
-  const pendingIssue = useMemo(
-    () =>
-      pendingClose === null
-        ? undefined
-        : issues.find((issue) => issue.key === pendingClose.issueKey),
-    [issues, pendingClose],
-  );
-  const showPrompt = pendingClose !== null && pendingIssue !== undefined;
-
-  // 已套用的篩選條件。兩顆 chip 都是真實狀態的投影，移除即清掉該條件。
-  const chips: readonly ActiveFilterChip[] = [
-    ...(search.trim() === ''
-      ? []
-      : [{ id: 'search', label: '搜尋', value: search.trim(), onRemove: () => setSearch('') }]),
-    ...(source === KANBAN_DEFAULT_SOURCE
-      ? []
-      : [
-          {
-            id: 'source',
-            label: '資料來源',
-            value: sourceOption.label,
-            onRemove: () => setSource(KANBAN_DEFAULT_SOURCE),
-          },
-        ]),
-  ];
-
-  /** changeIssueStatus 的畫面端投影：寫 Status，非終止狀態一併清掉 Resolution。 */
-  const applyStatus = useCallback((issueKey: string, status: string, resolution?: string) => {
-    setIssues((prev) =>
-      prev.map((issue) => {
-        if (issue.key !== issueKey) return issue;
-        // 逐鍵重組而非展開後覆寫：非終止狀態要的是「沒有 Resolution 這個鍵」，
-        // 不是 Resolution 為 undefined。
-        return {
-          key: issue.key,
-          type: issue.type,
-          title: issue.title,
-          assignee: issue.assignee,
-          status,
-          ...(issue.due === undefined ? {} : { due: issue.due }),
-          ...(resolution === undefined ? {} : { resolution }),
-        };
-      }),
+        issue.title.toLocaleLowerCase().includes(term),
     );
-  }, []);
+  }, [issues, search]);
 
   const endDrag = useCallback(() => {
     setDraggingKey(null);
@@ -151,7 +107,6 @@ export function KanbanScreen() {
   const onColumnDragOver = useCallback(
     (columnId: string, event: DragEvent<HTMLElement>) => {
       if (draggingKey === null) return;
-      // preventDefault 才會觸發 drop；不擋預設的話瀏覽器一律視為不可放置。
       event.preventDefault();
       event.dataTransfer.dropEffect = 'move';
       if (dropColumnId !== columnId) setDropColumnId(columnId);
@@ -160,43 +115,25 @@ export function KanbanScreen() {
   );
 
   const onColumnDrop = useCallback(
-    (columnId: string, isTerminal: boolean, event: DragEvent<HTMLElement>) => {
+    async (columnId: string, event: DragEvent<HTMLElement>) => {
       event.preventDefault();
       const issueKey = draggingKey;
       endDrag();
       if (issueKey === null) return;
       const issue = issues.find((i) => i.key === issueKey);
       if (issue === undefined || issue.status === columnId) return;
-      if (isTerminal) {
-        setPendingClose({ issueKey, columnId });
-        return;
+      setPendingKey(issueKey);
+      try {
+        await workspaceApi.updateIssue(issue.id, { status: columnId });
+        await reload();
+      } finally {
+        setPendingKey(null);
       }
-      applyStatus(issueKey, columnId);
     },
-    [applyStatus, draggingKey, endDrag, issues],
+    [draggingKey, endDrag, issues, reload],
   );
 
-  const renderCard = (issue: KanbanIssue) => {
-    const resolution = resolutionById(issue.resolution);
-    return (
-      <KanbanCard
-        key={issue.key}
-        issueKey={issue.key}
-        title={issue.title}
-        assignee={issue.assignee}
-        // 終止欄的卡片改掛結案原因：Status 已由欄承載，卡上再標一次沒有資訊量，
-        // Resolution 才是這一欄真正要看的狀態資訊。
-        due={resolution === undefined ? issue.due : undefined}
-        status={
-          resolution === undefined ? undefined : { label: resolution.label, tone: resolution.tone }
-        }
-        ghost={draggingKey === issue.key}
-        draggable
-        onDragStart={(event) => onCardDragStart(issue.key, event)}
-        onDragEnd={endDrag}
-      />
-    );
-  };
+  const chips = search.trim() === '' ? [] : [{ id: 'search', value: search.trim() }];
 
   return (
     <div
@@ -210,26 +147,13 @@ export function KanbanScreen() {
         fontFamily: FONT_FAMILY.base,
       }}
     >
-      {/* 工具列：資料來源、搜尋與篩選 */}
       <Toolbar
         left={
-          <>
-            <span
-              style={{
-                ...typeStyle(K.VIEW_TITLE_TYPE),
-                color: theme.text.primary,
-                whiteSpace: 'nowrap',
-              }}
-            >
-              工單看板
-            </span>
-            <Select
-              prefix="資料來源"
-              options={KANBAN_SOURCES}
-              value={source}
-              onChange={(value) => setSource(value as KanbanSourceId)}
-            />
-          </>
+          <span
+            style={{ ...typeStyle(K.VIEW_TITLE_TYPE), color: theme.text.primary, whiteSpace: 'nowrap' }}
+          >
+            工單看板
+          </span>
         }
         center={
           <TextInput
@@ -241,10 +165,9 @@ export function KanbanScreen() {
             style={{ width: K.SEARCH_WIDTH }}
           />
         }
-        right={<Button variant="ghost" iconLeft="filter" label="篩選條件" />}
+        right={<Button variant="ghost" label="重新整理" onClick={() => void reload()} />}
       />
 
-      {/* 已套用篩選 + 合欄說明 */}
       <div
         style={{
           display: 'flex',
@@ -255,98 +178,75 @@ export function KanbanScreen() {
         }}
       >
         {chips.map((chip) => (
-          <Chip key={chip.id} label={chip.label} value={chip.value} onRemove={chip.onRemove} />
+          <Chip key={chip.id} label="搜尋" value={chip.value} onRemove={() => setSearch('')} />
         ))}
-        <span
-          style={{ marginLeft: 'auto', ...typeStyle(K.META_TYPE), color: theme.text.tertiary }}
-        >
-          {`資料來源含 ${sourceOption.types.length} 種型別，同名狀態合為同一欄 · 共 ${columns.length} 欄`}
+        <span style={{ marginLeft: 'auto', ...typeStyle(K.META_TYPE), color: theme.text.tertiary }}>
+          {`共 ${columns.length} 欄 · ${visibleIssues.length} 張工單`}
         </span>
       </div>
 
-      {/* 權限過濾標示：被濾筆數為 0 時 FilterNotice 自身不渲染 */}
-      <div
-        style={{
-          padding: `0 ${K.PADDING_X}px`,
-          marginBottom: KANBAN_PERMISSION_FILTERED > 0 ? K.NOTICE_MARGIN_BOTTOM : 0,
-        }}
-      >
-        <FilterNotice count={KANBAN_PERMISSION_FILTERED} reason="無讀取權" />
-      </div>
-
-      {/* 看板欄區：依 Status 分欄，欄數不隨結案原因增加 */}
-      <div
-        style={{
-          position: 'relative',
-          flex: 1,
-          display: 'flex',
-          alignItems: 'flex-start',
-          gap: K.BOARD_GAP,
-          padding: `0 ${K.PADDING_X}px ${K.PADDING_BOTTOM}px`,
-          overflowX: 'auto',
-        }}
-      >
-        {showPrompt && (
-          <div
-            style={{
-              position: 'absolute',
-              inset: 0,
-              zIndex: K.Z_SCRIM,
-              background: withAlpha(theme.shadow.color, K.SCRIM_OPACITY),
-            }}
+      {error !== undefined ? (
+        <div style={{ padding: `0 ${K.PADDING_X}px` }}>
+          <EmptyState
+            icon="clock"
+            title="載入看板失敗"
+            description={error}
+            action={{ label: '重試', onClick: () => void reload() }}
           />
-        )}
-
-        {columns.map((column) => {
-          const cards = visibleIssues.filter((issue) => issue.status === column.id);
-          const isDropTarget = draggingKey !== null && dropColumnId === column.id;
-          const isPromptAnchor = showPrompt && pendingClose.columnId === column.id;
-          return (
-            <div
-              key={column.id}
-              style={{
-                position: 'relative',
-                flexShrink: 0,
-                ...(isPromptAnchor ? { zIndex: K.Z_ANCHOR_COLUMN } : {}),
-              }}
-            >
-              <KanbanColumn
-                title={column.label}
-                count={cards.length}
-                isDropTarget={isDropTarget}
-                maxHeight={K.COLUMN_BODY_MAX_HEIGHT}
-                onDragOver={(event) => onColumnDragOver(column.id, event)}
-                onDrop={(event) => onColumnDrop(column.id, column.isTerminal, event)}
-              >
-                {isDropTarget && <KanbanDropSlot label={`放到「${column.label}」`} />}
-                {cards.length === 0 && !isDropTarget ? (
-                  <EmptyState
-                    compact
-                    title="這一欄沒有工單"
-                    description="拖曳其他欄的卡片進來，或調整篩選條件。"
-                  />
-                ) : (
-                  cards.map(renderCard)
-                )}
-              </KanbanColumn>
-
-              {/* 拖入終止欄：結案原因選擇 */}
-              {isPromptAnchor && (
-                <KanbanResolutionPrompt
-                  issue={pendingIssue}
-                  targetLabel={column.label}
-                  options={KANBAN_RESOLUTIONS}
-                  onCancel={() => setPendingClose(null)}
-                  onConfirm={(resolutionId) => {
-                    applyStatus(pendingClose.issueKey, pendingClose.columnId, resolutionId);
-                    setPendingClose(null);
-                  }}
-                />
-              )}
-            </div>
-          );
-        })}
-      </div>
+        </div>
+      ) : loading && data === undefined ? (
+        <div style={{ padding: `0 ${K.PADDING_X}px`, ...typeStyle(K.META_TYPE), color: theme.text.tertiary }}>
+          載入中…
+        </div>
+      ) : (
+        <div
+          style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: K.BOARD_GAP,
+            padding: `0 ${K.PADDING_X}px ${K.PADDING_BOTTOM}px`,
+            overflowX: 'auto',
+          }}
+        >
+          {columns.map((columnId) => {
+            const cards = visibleIssues.filter((issue) => issue.status === columnId);
+            const isDropTarget = draggingKey !== null && dropColumnId === columnId;
+            return (
+              <div key={columnId} style={{ flexShrink: 0 }}>
+                <KanbanColumn
+                  title={columnId}
+                  count={cards.length}
+                  isDropTarget={isDropTarget}
+                  maxHeight={K.COLUMN_BODY_MAX_HEIGHT}
+                  onDragOver={(event) => onColumnDragOver(columnId, event)}
+                  onDrop={(event) => void onColumnDrop(columnId, event)}
+                >
+                  {isDropTarget && <KanbanDropSlot label={`放到「${columnId}」`} />}
+                  {cards.length === 0 && !isDropTarget ? (
+                    <EmptyState compact title="這一欄沒有工單" description="拖曳其他欄的卡片進來。" />
+                  ) : (
+                    cards.map((issue) => (
+                      <KanbanCard
+                        key={issue.key}
+                        issueKey={issue.key}
+                        title={issue.title}
+                        assignee={issue.assignee === '' ? undefined : issue.assignee}
+                        due={terminalSet.has(issue.status) ? undefined : dueDisplay(issue.due)}
+                        ghost={draggingKey === issue.key}
+                        loading={pendingKey === issue.key}
+                        draggable
+                        onDragStart={(event) => onCardDragStart(issue.key, event)}
+                        onDragEnd={endDrag}
+                      />
+                    ))
+                  )}
+                </KanbanColumn>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

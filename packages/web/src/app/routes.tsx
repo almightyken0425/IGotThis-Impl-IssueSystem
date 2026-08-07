@@ -1,0 +1,42 @@
+// 路由表 · 三個畫面各一條
+//
+// 單一真相：NAV_ITEMS 同時餵路由與側邊導覽列，兩處不各自維護一份清單。
+// 加畫面就在 NAV_ITEMS 補一筆，導覽列自動長出對應項。
+//
+// 走 BrowserRouter 形態（createBrowserRouter）。正式期由單體伺服器託管 dist，
+// 伺服器需對未命中的路徑回 index.html，深層網址直接開才不會 404。
+
+import { createBrowserRouter, Navigate } from 'react-router';
+
+import { DevOrderScreen } from '../screens/DevOrderScreen';
+import { KanbanScreen } from '../screens/KanbanScreen';
+import { ListScreen } from '../screens/ListScreen';
+import { AppShell } from './AppShell';
+
+export interface NavItem {
+  readonly path: string;
+  readonly label: string;
+}
+
+export const NAV_ITEMS: readonly NavItem[] = [
+  { path: '/list', label: '工單清單' },
+  { path: '/kanban', label: '工單看板' },
+  { path: '/dev-order', label: '開發順序表' },
+];
+
+const DEFAULT_PATH = '/list';
+
+export const router = createBrowserRouter([
+  {
+    path: '/',
+    element: <AppShell />,
+    children: [
+      { index: true, element: <Navigate to={DEFAULT_PATH} replace /> },
+      { path: 'list', element: <ListScreen /> },
+      { path: 'kanban', element: <KanbanScreen /> },
+      { path: 'dev-order', element: <DevOrderScreen /> },
+      // 未知路徑退回預設檢視，不留白畫面。
+      { path: '*', element: <Navigate to={DEFAULT_PATH} replace /> },
+    ],
+  },
+]);

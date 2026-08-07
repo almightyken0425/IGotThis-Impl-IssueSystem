@@ -5,16 +5,21 @@
 //
 // 主題選擇的持久化尚未接：ThemeProvider 收 initialThemeId 與 onThemeChange 兩個
 // 接口，等使用者偏好設定落地後由此灌入與寫出。目前每次載入都從 light 起算。
+//
+// 認證：AuthProvider 包在 router 之上，讓守衛與各畫面共讀同一份登入態。
 
 import { RouterProvider } from 'react-router';
 
 import { router } from './app/routes';
+import { AuthProvider } from './auth/AuthContext';
 import { ThemeProvider } from './theme';
 
 export function App() {
   return (
     <ThemeProvider>
-      <RouterProvider router={router} />
+      <AuthProvider>
+        <RouterProvider router={router} />
+      </AuthProvider>
     </ThemeProvider>
   );
 }

@@ -52,6 +52,12 @@ const EXPECTED_TABLES = [
   'view_sort_entries',
 ] as const;
 
+/**
+ * spec 實體以外、由 impl 層技術需求建立的基礎設施表。
+ * sessions 為自帶帳密認證的伺服器端 session 儲存，非 Model 層資料實體。
+ */
+const INFRA_TABLES = ['sessions'] as const;
+
 const suite = testUrl ? describe : describe.skip;
 
 suite('DB 基礎層 / 整合', () => {
@@ -81,13 +87,15 @@ suite('DB 基礎層 / 整合', () => {
     }
   });
 
-  it('建表數等於 spec 實體數加 schema_migrations，無多餘表', async () => {
+  it('建表數等於 spec 實體數加基礎設施表加 schema_migrations，無多餘表', async () => {
     const result = await pool.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM information_schema.tables
        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`,
     );
-    // 期望表 + runner 自己的 schema_migrations。
-    expect(Number(result.rows[0]?.count)).toBe(EXPECTED_TABLES.length + 1);
+    // spec 實體表 + impl 基礎設施表（sessions）+ runner 自己的 schema_migrations。
+    expect(Number(result.rows[0]?.count)).toBe(
+      EXPECTED_TABLES.length + INFRA_TABLES.length + 1,
+    );
   });
 
   it('全表帶非空 company_id 租戶鍵（companies 以自身 id 承載租戶鍵；deployment 不建表）', async () => {

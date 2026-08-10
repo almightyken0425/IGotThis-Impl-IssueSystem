@@ -2,7 +2,8 @@
 
 - 多產品開發團隊的 web 工單系統，定位先自用後商品化
 - 本 repo 為 Module Impl git，module_id 為 `no1_issue_system`
-- 現況為骨架階段，只有工程鏈路與目錄落點，尚無業務邏輯
+- 已完成地基層與多數引擎層，應用層局部完成
+- changelog_engine 與 workflow_engine 只有儲存與定義層，執行邏輯待補
 - 行為規格的仲裁端為對側 Module Spec git，視覺標準的仲裁端為對側 Module Design git
 
 ---
@@ -115,17 +116,24 @@
     │       ├── api/          HTTP 邊界，路由、驗證、序列化、靜態託管
     │       ├── auth/         帳密認證，密碼雜湊與 session
     │       ├── db/           唯一碰資料庫的一層，連線池與 repository
+    │       ├── permission/   有效權限計算
     │       └── domain/       core logic，純函式無 IO
     │           ├── shared/     跨 domain 共用：檢查結果、錯誤基底、日期與工作日曆
-    │           ├── relation/   關聯完整性，本輪 TDD 落點
-    │           ├── rollup/     彙總計算，本輪 TDD 落點
-    │           ├── numbering/  工單集 KEY 與顯示編號，本輪 TDD 落點
-    │           └── view/       看板欄序，本輪 TDD 落點
+    │           ├── relation/   關聯完整性
+    │           ├── rollup/     彙總計算與偏離標示
+    │           ├── numbering/  工單集 KEY 與顯示編號
+    │           └── view/       看板欄序與檢視排序
     └── web                   桌面瀏覽器前端
         └── src
             ├── main.tsx      掛載根
-            ├── App.tsx       最小頁面
-            └── theme/        design token 落點，內容待搬入
+            ├── App.tsx       路由掛載
+            ├── api/          後端 API 呼叫封裝
+            ├── app/          應用外殼與路由定義
+            ├── auth/         登入狀態與路由守衛
+            ├── components/   共用元件庫
+            ├── hooks/        共用 hook
+            ├── screens/      各畫面
+            └── theme/        design token，對齊 Pine Paper 標準
 ```
 
 - 依賴方向單向由外向內
@@ -159,12 +167,24 @@
 
 ---
 
-## 骨架階段待接事項
+## 待接事項
 
-- 資料庫連線池、migration 執行器與各聚合的 repository
-- 帳密註冊與登入流程、密碼雜湊參數定案、session 存放策略
-- 前端建置產物的靜態託管掛載
-- design token 搬入 `packages/web/src/theme/`，對齊 Pine Paper 深林紙感標準
-- 尚未動工的 Logic 層：狀態流程、權限、變更歷史、部署形態
-- `view` 只落了看板欄序，同層的日曆選用、工期天數、新單入表、排序與篩選待接
-- Docker 安裝後實跑 `docker-compose.yml`，確認 PostgreSQL 服務可用
+- **changelog_engine：**
+    - repository 層已有寫入與讀取
+    - 未掛進工單欄位寫入路徑，異動不會自動記錄
+    - 對外 API 待補
+    - 時點重建邏輯待寫
+- **workflow_engine：**
+    - 狀態、轉換、結案原因的定義層 CRUD 已完成
+    - 已接進建立型別的最小流程初始化
+    - 執行一次狀態轉換的邏輯待寫
+    - 轉換時的必填檢查待寫
+- **view_layer：**
+    - 日曆選用套用待接
+    - 工期天數呈現待接
+    - 新單自動入表待接
+    - 篩選待接
+- **web_shell：**
+    - 工單詳情頁待補
+    - 型別維護與定義區管理介面待補
+    - 登入頁在 design git 尚無定案畫面，目前以既有 token 就地組值頂著

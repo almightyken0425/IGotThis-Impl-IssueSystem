@@ -158,6 +158,152 @@ suite('view routes', () => {
     expect(again.statusCode).toBe(404);
   });
 
+  // ---- 手動排序 ----
+
+  async function sortedIds(viewId: string): Promise<string[]> {
+    const res = await call({ method: 'GET', url: `/api/views/${viewId}/sort` });
+    expect(res.statusCode).toBe(200);
+    return (res.json().entries as { issueId: string }[]).map((entry) => entry.issueId);
+  }
+
+  function place(viewId: string, issueId: string, targetIndex: number) {
+    return call({
+      method: 'PUT',
+      url: `/api/views/${viewId}/sort/${issueId}`,
+      payload: { targetIndex },
+    });
+  }
+
+  it('新檢視的排序區為空', async () => {
+    const view = await createView();
+    expect(await sortedIds(view.id)).toEqual([]);
+  });
+
+  it('指派位置後工單進入已排序區', async () => {
+    const view = await createView();
+    const issue = await seedIssue(pool, session.companyId, containers);
+
+    const res = await place(view.id, issue, 0);
+    expect(res.statusCode).toBe(200);
+    expect(await sortedIds(view.id)).toEqual([issue]);
+  });
+
+  it('依序插入三筆，順序與插入位置一致', async () => {
+    const view = await createView();
+    const [a, b, c] = await seedThree();
+
+    await place(view.id, a, 0);
+    await place(view.id, b, 1);
+    await place(view.id, c, 1);
+
+    expect(await sortedIds(view.id)).toEqual([a, c, b]);
+  });
+
+  it('重排既有項目：移到最前不重複佔位', async () => {
+    const view = await createView();
+    const [a, b, c] = await seedThree();
+    await place(view.id, a, 0);
+    await place(view.id, b, 1);
+    await place(view.id, c, 2);
+
+    await place(view.id, c, 0);
+
+    expect(await sortedIds(view.id)).toEqual([c, a, b]);
+  });
+
+  it('重排回原位順序不變', async () => {
+    const view = await createView();
+    const [a, b] = await seedThree();
+    await place(view.id, a, 0);
+    await place(view.id, b, 1);
+
+    expect((await place(view.id, b, 1)).statusCode).toBe(200);
+    expect(await sortedIds(view.id)).toEqual([a, b]);
+  });
+
+  it('回應直接帶回更新後的排序清單', async () => {
+    const view = await createView();
+    const [a, b] = await seedThree();
+    await place(view.id, a, 0);
+
+    const res = await place(view.id, b, 0);
+    expect((res.json().entries as { issueId: string }[]).map((e) => e.issueId)).toEqual([b, a]);
+  });
+
+  it('位置越界回 400 SORT_INDEX_OUT_OF_RANGE', async () => {
+    const view = await createView();
+    const issue = await seedIssue(pool, session.companyId, containers);
+
+    const res = await place(view.id, issue, 3);
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('SORT_INDEX_OUT_OF_RANGE');
+  });
+
+  it('檢視不存在回 404', async () => {
+    const issue = await seedIssue(pool, session.companyId, containers);
+    const res = await place(randomUUID(), issue, 0);
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error.code).toBe('VIEW_NOT_FOUND');
+  });
+
+  it('工單不存在回 404', async () => {
+    const view = await createView();
+    const res = await place(view.id, randomUUID(), 0);
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error.code).toBe('ISSUE_NOT_FOUND');
+  });
+
+  it('租戶隔離：另一 Company 的檢視讀不到也排不動', async () => {
+    const issue = await seedIssue(pool, session.companyId, containers);
+    const foreignViewId = await seedForeignView();
+
+    const read = await call({ method: 'GET', url: `/api/views/${foreignViewId}/sort` });
+    expect(read.statusCode).toBe(404);
+
+    const write = await place(foreignViewId, issue, 0);
+    expect(write.statusCode).toBe(404);
+  });
+
+  it('刪除檢視連同排序項一併清除', async () => {
+    const view = await createView();
+    const issue = await seedIssue(pool, session.companyId, containers);
+    await place(view.id, issue, 0);
+
+    await call({ method: 'DELETE', url: `/api/views/${view.id}` });
+
+    const rows = await pool.query('SELECT 1 FROM view_sort_entries WHERE view_id = $1', [view.id]);
+    expect(rows.rowCount).toBe(0);
+  });
+
+  async function seedThree(): Promise<[string, string, string]> {
+    return [
+      await seedIssue(pool, session.companyId, containers),
+      await seedIssue(pool, session.companyId, containers),
+      await seedIssue(pool, session.companyId, containers),
+    ];
+  }
+
+  /**
+   * 造一張隸屬另一個 Company 的檢視。
+   * 單一 Company 模式下再註冊一個帳號只會綁進同一租戶，拿不到第二個租戶，只能直插。
+   */
+  async function seedForeignView(): Promise<string> {
+    const companyId = randomUUID();
+    const accountId = randomUUID();
+    const viewId = randomUUID();
+    await pool.query('INSERT INTO companies (id, name) VALUES ($1,$2)', [companyId, 'Other Co']);
+    await pool.query(
+      'INSERT INTO accounts (id, company_id, name, created_on, updated_on) VALUES ($1,$2,$3,$4,$5)',
+      [accountId, companyId, 'Other Owner', 0, 0],
+    );
+    await pool.query(
+      `INSERT INTO views (id, company_id, name, owner_id, view_type, source_mgmt_ids, display_level)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [viewId, companyId, 'Theirs', accountId, 'list', JSON.stringify([]), 0],
+    );
+    return viewId;
+  }
+
   // ---- 看板欄序 ----
 
   it('看板欄序由工單型別的流程狀態保序併入', async () => {

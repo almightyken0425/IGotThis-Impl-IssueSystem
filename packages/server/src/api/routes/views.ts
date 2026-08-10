@@ -7,7 +7,14 @@ import { currentIdentity } from '../../auth/middleware.js';
 import { withTransaction } from '../../db/client.js';
 import { fieldRepo, issueRepo, relationRepo, viewRepo } from '../../db/repositories/index.js';
 import type { View } from '../../db/repositories/index.js';
-import { buildKanbanColumns, computeRollupValue, RollupError, WORK_LOG_FIELD_NAME } from '../../domain/index.js';
+import {
+  assignSortPosition,
+  buildKanbanColumns,
+  computeRollupValue,
+  RollupError,
+  SortPositionError,
+  WORK_LOG_FIELD_NAME,
+} from '../../domain/index.js';
 import type {
   FieldDef,
   IssueFieldRecord,
@@ -79,6 +86,22 @@ const idParamsSchema = {
   type: 'object',
   required: ['id'],
   properties: { id: { type: 'string', minLength: 1 } },
+} as const;
+
+const sortParamsSchema = {
+  type: 'object',
+  required: ['id', 'issueId'],
+  properties: {
+    id: { type: 'string', minLength: 1 },
+    issueId: { type: 'string', minLength: 1 },
+  },
+} as const;
+
+const sortBodySchema = {
+  type: 'object',
+  required: ['targetIndex'],
+  additionalProperties: false,
+  properties: { targetIndex: { type: 'integer', minimum: 0 } },
 } as const;
 
 interface CreateViewBody {
@@ -313,6 +336,69 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
         return sendError(reply, 404, 'VIEW_NOT_FOUND', '檢視不存在');
       }
       return reply.status(204).send();
+    },
+  );
+
+  // ---- 手動排序 ----
+
+  // 一張檢視的已排序項，依排序值升冪；無列的工單屬該檢視的未排序區。查無檢視回 404。
+  app.get<{ Params: { id: string } }>(
+    '/:id/sort',
+    { schema: { params: idParamsSchema } },
+    async (request, reply) => {
+      const { companyId } = currentIdentity(request);
+      const view = await viewRepo.getView(pool, companyId, request.params.id);
+      if (view === undefined) {
+        return sendError(reply, 404, 'VIEW_NOT_FOUND', '檢視不存在');
+      }
+      const entries = await viewRepo.listSortEntries(pool, companyId, request.params.id);
+      return reply.status(200).send({ entries });
+    },
+  );
+
+  // 指派工單於檢視的排序位置，對應 spec ViewLogic / assignSortPosition。
+  //
+  // targetIndex 是「把目標自己移出後」的插入位置，移入未排序區與既有重排走同一條路徑。
+  // 讀現有排序、算值、寫入同在一個交易內，避免兩人同時拖曳時互相覆蓋。
+  // 回傳更新後的完整排序清單，前端不必再打一次 GET。
+  app.put<{ Params: { id: string; issueId: string }; Body: { targetIndex: number } }>(
+    '/:id/sort/:issueId',
+    { schema: { params: sortParamsSchema, body: sortBodySchema } },
+    async (request, reply) => {
+      const { companyId } = currentIdentity(request);
+      const { id, issueId } = request.params;
+
+      const view = await viewRepo.getView(pool, companyId, id);
+      if (view === undefined) {
+        return sendError(reply, 404, 'VIEW_NOT_FOUND', '檢視不存在');
+      }
+      const issue = await issueRepo.getIssue(companyId, issueId, pool);
+      if (issue === undefined) {
+        return sendError(reply, 404, 'ISSUE_NOT_FOUND', '工單不存在');
+      }
+
+      try {
+        const entries = await withTransaction(async (tx) => {
+          const current = await viewRepo.listSortEntries(tx, companyId, id);
+          const sortValue = assignSortPosition(current, issueId, request.body.targetIndex);
+          await viewRepo.upsertSortEntry(tx, {
+            id: randomUUID(),
+            companyId,
+            viewId: id,
+            issueId,
+            sortValue,
+          });
+          return viewRepo.listSortEntries(tx, companyId, id);
+        }, pool);
+        return reply.status(200).send({ entries });
+      } catch (error: unknown) {
+        if (error instanceof SortPositionError) {
+          // 位置越界屬請求本身不合法；精度耗盡是該檢視的狀態需重鋪，非本次請求的錯。
+          const status = error.code === 'SORT_INDEX_OUT_OF_RANGE' ? 400 : 409;
+          return sendError(reply, status, error.code, error.message);
+        }
+        throw error;
+      }
     },
   );
 

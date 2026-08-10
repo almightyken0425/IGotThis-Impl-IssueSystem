@@ -19,3 +19,11 @@ export interface IssueTypeWorkflow {
 export interface KanbanColumn {
   readonly name: string;
 }
+
+/** ViewSortEntries 中參與位置計算的欄位子集。 */
+export interface SortEntryRef {
+  /** 排序對象工單；同檢視內每工單至多一筆。 */
+  readonly issueId: string;
+  /** 手動排序值，同檢視內決定先後。 */
+  readonly sortValue: number;
+}

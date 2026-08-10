@@ -19,7 +19,7 @@ import {
   useTheme,
 } from '../../theme';
 import { typeStyle } from '../typeStyle';
-import type { KanbanIssue, KanbanResolution } from './fixtures';
+import type { WorkspaceIssue, WorkspaceResolutionOption } from '../../api';
 import { KANBAN_SCREEN_TOKENS } from './tokens';
 
 const K = KANBAN_SCREEN_TOKENS;
@@ -64,11 +64,11 @@ export function KanbanDropSlot({ label }: KanbanDropSlotProps) {
 // 取消則卡片留在原欄，浮層收起、不呼叫 changeIssueStatus。
 
 export interface KanbanResolutionPromptProps {
-  readonly issue: KanbanIssue;
+  readonly issue: Pick<WorkspaceIssue, 'key'>;
   readonly targetLabel: string;
-  readonly options: readonly KanbanResolution[];
+  readonly options: readonly WorkspaceResolutionOption[];
   readonly onCancel: () => void;
-  readonly onConfirm: (resolutionId: string) => void;
+  readonly onConfirm: (resolutionValue: string) => void;
 }
 
 export function KanbanResolutionPrompt({
@@ -120,16 +120,16 @@ export function KanbanResolutionPrompt({
 
       <div style={{ display: 'flex', flexDirection: 'column' }}>
         {options.map((option) => {
-          const active = picked === option.id;
-          const live = hovered === option.id && !active;
+          const active = picked === option.value;
+          const live = hovered === option.value && !active;
           return (
             <button
-              key={option.id}
+              key={option.value}
               type="button"
               role="radio"
               aria-checked={active}
-              onClick={() => setPicked(option.id)}
-              onMouseEnter={() => setHovered(option.id)}
+              onClick={() => setPicked(option.value)}
+              onMouseEnter={() => setHovered(option.value)}
               onMouseLeave={() => setHovered(null)}
               style={{
                 display: 'flex',
@@ -177,8 +177,8 @@ export function KanbanResolutionPrompt({
                   />
                 )}
               </span>
-              <span style={{ flex: 1, minWidth: 0 }}>{option.label}</span>
-              <Badge tone={option.tone ?? 'neutral'} label="Resolution" dot={false} />
+              <span style={{ flex: 1, minWidth: 0 }}>{option.value}</span>
+              <Badge tone="neutral" label="Resolution" dot={false} />
             </button>
           );
         })}

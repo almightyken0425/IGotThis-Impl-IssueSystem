@@ -11,5 +11,6 @@ export type {
   UpdateIssueInput,
   WorkspaceContext,
   WorkspaceIssue,
+  WorkspaceResolutionOption,
   WorkspaceStatus,
 } from './types';

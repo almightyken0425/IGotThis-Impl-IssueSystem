@@ -64,7 +64,7 @@ suite('workspace routes', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('啟動工作區回脈絡：工單集 KEY 為 IGT、含四個狀態', async () => {
+  it('啟動工作區回脈絡：工單集 KEY 為 IGT、含四個狀態與結案原因選項', async () => {
     const res = await call({ method: 'GET', url: '/api/workspace' });
     expect(res.statusCode).toBe(200);
     const body = res.json();
@@ -77,6 +77,10 @@ suite('workspace routes', () => {
       '已完成',
     ]);
     expect(body.statuses.at(-1).isTerminal).toBe(true);
+    expect(body.resolutionOptions.map((r: { value: string }) => r.value)).toEqual([
+      '已完成',
+      '不做',
+    ]);
   });
 
   it('冪等：重複啟動不重建、工單集 id 穩定', async () => {
@@ -120,17 +124,144 @@ suite('workspace routes', () => {
     expect(res.json().issues).toHaveLength(2);
   });
 
-  it('更新工單狀態，列表反映新狀態', async () => {
+  it('沿合法路徑逐步轉換：待處理→處理中→審查中→已完成，終止時寫入結案原因', async () => {
     const created = (
       await call({ method: 'POST', url: '/api/workspace/issues', payload: { title: 'A' } })
     ).json().issue;
-    const patched = await call({
+
+    const toDoing = await call({
+      method: 'PATCH',
+      url: `/api/workspace/issues/${created.id}`,
+      payload: { status: '處理中' },
+    });
+    expect(toDoing.statusCode).toBe(200);
+    expect(toDoing.json().issue.status).toBe('處理中');
+
+    const toReview = await call({
+      method: 'PATCH',
+      url: `/api/workspace/issues/${created.id}`,
+      payload: { status: '審查中' },
+    });
+    expect(toReview.statusCode).toBe(200);
+    expect(toReview.json().issue.status).toBe('審查中');
+
+    const toDone = await call({
+      method: 'PATCH',
+      url: `/api/workspace/issues/${created.id}`,
+      payload: { status: '已完成', resolution: '已完成' },
+    });
+    expect(toDone.statusCode).toBe(200);
+    expect(toDone.json().issue.status).toBe('已完成');
+    expect(toDone.json().issue.resolution).toBe('已完成');
+  });
+
+  it('跳過中間狀態被拒：待處理直接轉已完成回 422 TRANSITION_NOT_ALLOWED', async () => {
+    const created = (
+      await call({ method: 'POST', url: '/api/workspace/issues', payload: { title: 'A' } })
+    ).json().issue;
+    const res = await call({
+      method: 'PATCH',
+      url: `/api/workspace/issues/${created.id}`,
+      payload: { status: '已完成', resolution: '已完成' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe('TRANSITION_NOT_ALLOWED');
+  });
+
+  it('終止狀態缺結案原因被拒：回 422 RESOLUTION_REQUIRED', async () => {
+    const created = (
+      await call({ method: 'POST', url: '/api/workspace/issues', payload: { title: 'A' } })
+    ).json().issue;
+    await call({
+      method: 'PATCH',
+      url: `/api/workspace/issues/${created.id}`,
+      payload: { status: '處理中' },
+    });
+    await call({
+      method: 'PATCH',
+      url: `/api/workspace/issues/${created.id}`,
+      payload: { status: '審查中' },
+    });
+    const res = await call({
       method: 'PATCH',
       url: `/api/workspace/issues/${created.id}`,
       payload: { status: '已完成' },
     });
-    expect(patched.statusCode).toBe(200);
-    expect(patched.json().issue.status).toBe('已完成');
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe('RESOLUTION_REQUIRED');
+  });
+
+  it('結案原因不在選項清單被拒：回 422 RESOLUTION_NOT_ALLOWED', async () => {
+    const created = (
+      await call({ method: 'POST', url: '/api/workspace/issues', payload: { title: 'A' } })
+    ).json().issue;
+    await call({
+      method: 'PATCH',
+      url: `/api/workspace/issues/${created.id}`,
+      payload: { status: '處理中' },
+    });
+    await call({
+      method: 'PATCH',
+      url: `/api/workspace/issues/${created.id}`,
+      payload: { status: '審查中' },
+    });
+    const res = await call({
+      method: 'PATCH',
+      url: `/api/workspace/issues/${created.id}`,
+      payload: { status: '已完成', resolution: '不存在的原因' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe('RESOLUTION_NOT_ALLOWED');
+  });
+
+  it('resolution 沒有 status 陪同被拒：回 422 RESOLUTION_REQUIRES_STATUS_CHANGE', async () => {
+    const created = (
+      await call({ method: 'POST', url: '/api/workspace/issues', payload: { title: 'A' } })
+    ).json().issue;
+    const res = await call({
+      method: 'PATCH',
+      url: `/api/workspace/issues/${created.id}`,
+      payload: { resolution: '已完成' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe('RESOLUTION_REQUIRES_STATUS_CHANGE');
+  });
+
+  it('審查中可退回處理中', async () => {
+    const created = (
+      await call({ method: 'POST', url: '/api/workspace/issues', payload: { title: 'A' } })
+    ).json().issue;
+    await call({
+      method: 'PATCH',
+      url: `/api/workspace/issues/${created.id}`,
+      payload: { status: '處理中' },
+    });
+    await call({
+      method: 'PATCH',
+      url: `/api/workspace/issues/${created.id}`,
+      payload: { status: '審查中' },
+    });
+    const res = await call({
+      method: 'PATCH',
+      url: `/api/workspace/issues/${created.id}`,
+      payload: { status: '處理中' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().issue.status).toBe('處理中');
+  });
+
+  it('狀態值與現況相同視為 no-op，不觸發驗證，其他欄位仍正常寫入', async () => {
+    const created = (
+      await call({ method: 'POST', url: '/api/workspace/issues', payload: { title: 'A' } })
+    ).json().issue;
+    const res = await call({
+      method: 'PATCH',
+      url: `/api/workspace/issues/${created.id}`,
+      payload: { status: '待處理', title: 'A 改名' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().issue.status).toBe('待處理');
+    expect(res.json().issue.title).toBe('A 改名');
   });
 
   it('更新不存在的工單回 404', async () => {

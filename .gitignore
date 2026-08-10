@@ -1,4 +1,5 @@
-node_modules/
+# 不加尾斜線：worktree 的 node_modules 是 symlink 而非目錄，帶斜線匹配不到
+node_modules
 dist/
 build/
 coverage/

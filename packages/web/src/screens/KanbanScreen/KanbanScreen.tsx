@@ -8,15 +8,18 @@
 //
 // 資料來源：改接真 API。欄由 /api/views/kanban-columns 取回，卡片由
 // /api/workspace/issues 取回並依 status 欄位分欄；拖入他欄即 PATCH 該工單 status。
-// design 的假資料、結案原因浮層與多資料來源不搬——單一工作區、狀態即欄。
+// 拖進終止欄先跳結案原因選單，通過 changeIssueStatus 驗證才落地；非終止欄
+// 仍直接送出，若後端 422 則行內提示、卡片留在原欄。design 的多資料來源不搬
+// ——單一工作區、狀態即欄。
 //
 // 消費元件：gantt/Toolbar、controls（TextInput / Button / Chip）、
-//           data（KanbanColumn / KanbanCard / EmptyState），本檔私有 KanbanDropSlot。
+//           data（KanbanColumn / KanbanCard / EmptyState），
+//           本檔私有 KanbanDropSlot / KanbanResolutionPrompt。
 
 import { useCallback, useMemo, useState } from 'react';
 import type { DragEvent } from 'react';
 
-import { workspaceApi } from '../../api';
+import { ApiError, workspaceApi } from '../../api';
 import type { WorkspaceContext, WorkspaceIssue } from '../../api';
 import { Button, Chip, TextInput } from '../../components/controls';
 import { EmptyState, KanbanCard, KanbanColumn } from '../../components/data';
@@ -25,7 +28,7 @@ import { Toolbar } from '../../components/gantt';
 import { useAsync } from '../../hooks/useAsync';
 import { FONT_FAMILY, useTheme } from '../../theme';
 import { typeStyle } from '../typeStyle';
-import { KanbanDropSlot } from './internal';
+import { KanbanDropSlot, KanbanResolutionPrompt } from './internal';
 import { KANBAN_SCREEN_TOKENS } from './tokens';
 
 const K = KANBAN_SCREEN_TOKENS;
@@ -74,6 +77,11 @@ export function KanbanScreen() {
   const [draggingKey, setDraggingKey] = useState<string | null>(null);
   const [dropColumnId, setDropColumnId] = useState<string | null>(null);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
+  const [resolutionPrompt, setResolutionPrompt] = useState<{
+    readonly issue: WorkspaceIssue;
+    readonly targetColumnId: string;
+  } | null>(null);
+  const [dropError, setDropError] = useState<string | undefined>(undefined);
 
   const columns = data?.columns ?? [];
   const issues = data?.issues ?? [];
@@ -114,6 +122,25 @@ export function KanbanScreen() {
     [draggingKey, dropColumnId],
   );
 
+  const applyStatusChange = useCallback(
+    async (issue: WorkspaceIssue, status: string, resolution?: string) => {
+      setPendingKey(issue.key);
+      setDropError(undefined);
+      try {
+        await workspaceApi.updateIssue(issue.id, {
+          status,
+          ...(resolution !== undefined ? { resolution } : {}),
+        });
+        await reload();
+      } catch (err: unknown) {
+        setDropError(err instanceof ApiError ? err.message : '狀態更新失敗');
+      } finally {
+        setPendingKey(null);
+      }
+    },
+    [reload],
+  );
+
   const onColumnDrop = useCallback(
     async (columnId: string, event: DragEvent<HTMLElement>) => {
       event.preventDefault();
@@ -122,16 +149,26 @@ export function KanbanScreen() {
       if (issueKey === null) return;
       const issue = issues.find((i) => i.key === issueKey);
       if (issue === undefined || issue.status === columnId) return;
-      setPendingKey(issueKey);
-      try {
-        await workspaceApi.updateIssue(issue.id, { status: columnId });
-        await reload();
-      } finally {
-        setPendingKey(null);
+      if (terminalSet.has(columnId)) {
+        setResolutionPrompt({ issue, targetColumnId: columnId });
+        return;
       }
+      await applyStatusChange(issue, columnId);
     },
-    [draggingKey, endDrag, issues, reload],
+    [draggingKey, endDrag, issues, terminalSet, applyStatusChange],
   );
+
+  const onResolutionConfirm = useCallback(
+    (resolutionValue: string) => {
+      if (resolutionPrompt === null) return;
+      const { issue, targetColumnId } = resolutionPrompt;
+      setResolutionPrompt(null);
+      void applyStatusChange(issue, targetColumnId, resolutionValue);
+    },
+    [resolutionPrompt, applyStatusChange],
+  );
+
+  const onResolutionCancel = useCallback(() => setResolutionPrompt(null), []);
 
   const chips = search.trim() === '' ? [] : [{ id: 'search', value: search.trim() }];
 
@@ -180,6 +217,11 @@ export function KanbanScreen() {
         {chips.map((chip) => (
           <Chip key={chip.id} label="搜尋" value={chip.value} onRemove={() => setSearch('')} />
         ))}
+        {dropError !== undefined && (
+          <span role="alert" style={{ ...typeStyle(K.META_TYPE), color: theme.status.error_fg }}>
+            {dropError}
+          </span>
+        )}
         <span style={{ marginLeft: 'auto', ...typeStyle(K.META_TYPE), color: theme.text.tertiary }}>
           {`共 ${columns.length} 欄 · ${visibleIssues.length} 張工單`}
         </span>
@@ -213,7 +255,7 @@ export function KanbanScreen() {
             const cards = visibleIssues.filter((issue) => issue.status === columnId);
             const isDropTarget = draggingKey !== null && dropColumnId === columnId;
             return (
-              <div key={columnId} style={{ flexShrink: 0 }}>
+              <div key={columnId} style={{ flexShrink: 0, position: 'relative' }}>
                 <KanbanColumn
                   title={columnId}
                   count={cards.length}
@@ -242,6 +284,15 @@ export function KanbanScreen() {
                     ))
                   )}
                 </KanbanColumn>
+                {resolutionPrompt !== null && resolutionPrompt.targetColumnId === columnId && (
+                  <KanbanResolutionPrompt
+                    issue={resolutionPrompt.issue}
+                    targetLabel={columnId}
+                    options={data?.context.resolutionOptions ?? []}
+                    onCancel={onResolutionCancel}
+                    onConfirm={onResolutionConfirm}
+                  />
+                )}
               </div>
             );
           })}

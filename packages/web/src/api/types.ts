@@ -17,18 +17,24 @@ export interface Company {
   readonly name: string;
 }
 
-/** 工作區脈絡：登入後啟動點回傳，含工單集、型別與流程狀態。 */
+/** 工作區脈絡：登入後啟動點回傳，含工單集、型別、流程狀態與結案原因選項。 */
 export interface WorkspaceContext {
   readonly company: Company;
   readonly issueSet: { readonly id: string; readonly name: string; readonly key: string };
   readonly issueType: { readonly id: string; readonly name: string; readonly label: string };
   readonly statuses: readonly WorkspaceStatus[];
+  readonly resolutionOptions: readonly WorkspaceResolutionOption[];
 }
 
 /** 流程狀態：name 即看板欄與清單狀態的識別，isTerminal 決定是否為結案欄。 */
 export interface WorkspaceStatus {
   readonly name: string;
   readonly isTerminal: boolean;
+}
+
+/** 結案原因選項：getResolutionOptions 的產出投影。 */
+export interface WorkspaceResolutionOption {
+  readonly value: string;
 }
 
 /** 工單 + 欄位單值摺疊而成的加值列。三個畫面共用的工單資料形狀。 */
@@ -40,6 +46,7 @@ export interface WorkspaceIssue {
   readonly assignee: string;
   readonly point: number | null;
   readonly due: string | null;
+  readonly resolution: string | null;
 }
 
 /** 建立工單的輸入。 */
@@ -51,10 +58,11 @@ export interface CreateIssueInput {
   readonly due?: string;
 }
 
-/** 更新工單欄位的輸入；帶到的欄位就寫、null 清除、未帶不動。 */
+/** 更新工單欄位的輸入；帶到的欄位就寫、null 清除、未帶不動。resolution 只能隨一次真正的 status 轉換一併提供。 */
 export interface UpdateIssueInput {
   readonly title?: string;
   readonly status?: string;
+  readonly resolution?: string;
   readonly assignee?: string | '';
   readonly point?: number | null;
   readonly due?: string | null;

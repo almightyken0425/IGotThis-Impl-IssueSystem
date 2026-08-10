@@ -32,6 +32,14 @@ const EXPECTED_BEHAVIORS = [
   'takeNextSeq',
   // view
   'buildKanbanColumns',
+  // workflow
+  'checkTransitionAllowed',
+  'checkActorRole',
+  'checkRequiredFieldsPresent',
+  'checkResolutionRequiredForTerminal',
+  'checkResolutionValueAllowed',
+  'validateStatusTransition',
+  'changeIssueStatus',
   // shared
   'isWorkingDay',
   'differenceInWorkingDays',

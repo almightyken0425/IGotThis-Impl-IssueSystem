@@ -10,13 +10,13 @@
 ## 起步
 
 - 環境需求
-    - Node 22 以上，開發機實測 v24.10.0
-    - npm 11 以上，開發機實測 11.6.1
-    - PostgreSQL 17，本機以容器提供
+    - Node 22 以上
+    - npm 10 以上
+    - PostgreSQL 17，本機安裝或容器擇一
 - 安裝依賴，在 repo 根目錄執行一次即涵蓋兩個 workspace
 
     ```bash
-    npm install
+    npm ci
     ```
 
 - 準備環境變數，複製範本後填入實際值
@@ -25,13 +25,31 @@
     cp .env.example .env
     ```
 
-- 啟動資料庫，本機尚未安裝 Docker、此步待環境就緒
+    - `TEST_DATABASE_URL` 缺漏時整合測試靜默略過，不報錯，接手時最易漏
+- 備妥資料庫，開發庫與測試庫各一，兩者不共用
+    - 走本機安裝時自行建立角色與兩個資料庫，密碼須與 `.env` 一致
+
+        ```bash
+        psql -d postgres -c "CREATE ROLE igotthis LOGIN PASSWORD 'change_me_local_only' CREATEDB"
+        createdb --owner igotthis igotthis_dev
+        createdb --owner igotthis igotthis_test
+        ```
+
+    - 走容器時 compose 只建開發庫，測試庫另行補建
+
+        ```bash
+        docker compose up -d db
+        docker compose exec db createdb --username igotthis igotthis_test
+        ```
+
+- 套用 migration，開發庫與測試庫各跑一次
 
     ```bash
-    docker compose up -d db
-    docker compose ps
+    npm run migrate --workspace @igotthis/server
+    npm run migrate:test --workspace @igotthis/server
     ```
 
+    - 前向式執行，已套過的自動略過，可安全重跑
 - 啟動開發伺服器，前端與後端同時起
 
     ```bash

@@ -97,12 +97,13 @@ suite('view routes', () => {
       sourceMgmtIds: readonly string[];
       filterConfig: unknown;
       calendarName: string | null;
+      displayLevel: number;
     }> = {},
   ): Promise<{ id: string; ownerId: string }> {
     const res = await call({
       method: 'POST',
       url: '/api/views',
-      payload: { name, viewType: 'list', sourceMgmtIds: [], displayLevel: 0, ...overrides },
+      payload: { name, viewType: 'list', sourceMgmtIds: [], displayLevel: 1, ...overrides },
     });
     expect(res.statusCode).toBe(201);
     return res.json().view;
@@ -154,6 +155,24 @@ suite('view routes', () => {
       method: 'PATCH',
       url: `/api/views/${randomUUID()}`,
       payload: { columnConfig: {} },
+    });
+    expect(gone.statusCode).toBe(404);
+  });
+
+  it('更新檢視顯示層級，對應 spec ViewLogic / switchDisplayLevel；不存在回 404', async () => {
+    const view = await createView();
+    const patched = await call({
+      method: 'PATCH',
+      url: `/api/views/${view.id}`,
+      payload: { displayLevel: 2 },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().view.displayLevel).toBe(2);
+
+    const gone = await call({
+      method: 'PATCH',
+      url: `/api/views/${randomUUID()}`,
+      payload: { displayLevel: 1 },
     });
     expect(gone.statusCode).toBe(404);
   });
@@ -507,6 +526,158 @@ suite('view routes', () => {
     const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
     const row = res.json().unsortedIssues[0];
     expect(row.duration).toEqual({ hasDuration: true, days: 5, unit: 'workingDay' });
+  });
+
+  // ---- 顯示層級（switchDisplayLevel） ----
+
+  /** 建一個關聯型別；預設獨佔、禁環，不有序（Children 呼叫端自行覆寫 ordered: true）。 */
+  async function createRelationType(
+    name: string,
+    overrides: Partial<{ ordered: boolean }> = {},
+  ): Promise<string> {
+    const res = await call({
+      method: 'POST',
+      url: '/api/relations/types',
+      payload: { name, exclusive: true, acyclic: true, ordered: false, rollup: false, ...overrides },
+    });
+    expect(res.statusCode).toBe(201);
+    return res.json().relationType.id;
+  }
+
+  async function createEdge(fromIssueId: string, toIssueId: string, relationTypeId: string): Promise<void> {
+    const res = await call({
+      method: 'POST',
+      url: '/api/relations/edges',
+      payload: { fromIssueId, toIssueId, relationTypeId },
+    });
+    expect(res.statusCode).toBe(201);
+  }
+
+  /** 建一個一般工單集（不是任何 Mgmt 的主題單位置），供 Container/Children 測試工單使用。 */
+  async function seedWorkIssueSet(): Promise<string> {
+    const issueSetId = randomUUID();
+    await pool.query(
+      'INSERT INTO issue_sets (id, company_id, mgmt_id, name, key) VALUES ($1,$2,$3,$4,$5)',
+      [issueSetId, session.companyId, containers.mgmtId, 'Work', `WORK${issueSetId.slice(0, 4)}`],
+    );
+    return issueSetId;
+  }
+
+  async function seedWorkIssue(issueSetId: string, key: string): Promise<string> {
+    const id = randomUUID();
+    await pool.query(
+      'INSERT INTO issues (id, company_id, issue_set_id, issue_type_id, issue_key) VALUES ($1,$2,$3,$4,$5)',
+      [id, session.companyId, issueSetId, containers.issueTypeId, key],
+    );
+    return id;
+  }
+
+  function levelIssuesOf(
+    res: { sortedIssues: { id: string; levelIssues: { id: string }[] }[]; unsortedIssues: { id: string; levelIssues: { id: string }[] }[] },
+    topicIssueId: string,
+  ): string[] {
+    const row = [...res.sortedIssues, ...res.unsortedIssues].find((r) => r.id === topicIssueId);
+    return (row?.levelIssues ?? []).map((r) => r.id);
+  }
+
+  it('levelIssues：Container 起點加兩層 Children，依 displayLevel 篩出對應層', async () => {
+    const containerType = await createRelationType('Container');
+    const childrenType = await createRelationType('Children', { ordered: true });
+    const workSetId = await seedWorkIssueSet();
+    const topic = await seedIssue(pool, session.companyId, containers);
+    const root = await seedWorkIssue(workSetId, 'WORK-1');
+    const mid = await seedWorkIssue(workSetId, 'WORK-2');
+    const leaf = await seedWorkIssue(workSetId, 'WORK-3');
+    await createEdge(topic, root, containerType);
+    await createEdge(root, mid, childrenType);
+    await createEdge(mid, leaf, childrenType);
+
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId], displayLevel: 2 });
+
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    expect(levelIssuesOf(res.json(), topic)).toEqual([mid]);
+  });
+
+  it('主題單無 Container 綁定：levelIssues 為空', async () => {
+    await createRelationType('Container');
+    await createRelationType('Children', { ordered: true });
+    const topic = await seedIssue(pool, session.companyId, containers);
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId], displayLevel: 1 });
+
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    expect(levelIssuesOf(res.json(), topic)).toEqual([]);
+  });
+
+  it('Container／Children 型別此 Company 尚未建立：整包仍 200，levelIssues 為空', async () => {
+    const topic = await seedIssue(pool, session.companyId, containers);
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId], displayLevel: 1 });
+
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    expect(res.statusCode).toBe(200);
+    expect(levelIssuesOf(res.json(), topic)).toEqual([]);
+  });
+
+  it('兩張主題單各自的層級內容互不污染', async () => {
+    const containerType = await createRelationType('Container');
+    const workSetId = await seedWorkIssueSet();
+    const topicA = await seedIssue(pool, session.companyId, containers);
+    const topicB = await seedIssue(pool, session.companyId, containers);
+    const rootA = await seedWorkIssue(workSetId, 'WORK-A');
+    const rootB = await seedWorkIssue(workSetId, 'WORK-B');
+    await createEdge(topicA, rootA, containerType);
+    await createEdge(topicB, rootB, containerType);
+
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId], displayLevel: 1 });
+
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    const body = res.json();
+    expect(levelIssuesOf(body, topicA)).toEqual([rootA]);
+    expect(levelIssuesOf(body, topicB)).toEqual([rootB]);
+  });
+
+  it('主題單清單恆定：切換 displayLevel 前後 sortedIssues／unsortedIssues 的內容不變', async () => {
+    const [a, b, c] = await seedThree();
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId], displayLevel: 1 });
+    await place(view.id, a, 0);
+
+    const before = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    const beforeBody = before.json();
+    expect(beforeBody.sortedIssues.map((row: { id: string }) => row.id)).toEqual([a]);
+    expect(beforeBody.unsortedIssues.map((row: { id: string }) => row.id).sort()).toEqual([b, c].sort());
+
+    const patchRes = await call({
+      method: 'PATCH',
+      url: `/api/views/${view.id}`,
+      payload: { displayLevel: 3 },
+    });
+    expect(patchRes.statusCode).toBe(200);
+    const after = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+
+    expect(issueIds(after.json())).toEqual(issueIds(beforeBody));
+  });
+
+  it('母子鏈成環：GET /:id/issues 回 422 RELATION_CYCLE，不是 500', async () => {
+    const containerType = await createRelationType('Container');
+    const childrenType = await createRelationType('Children', { ordered: true });
+    const workSetId = await seedWorkIssueSet();
+    const topic = await seedIssue(pool, session.companyId, containers);
+    const a = await seedWorkIssue(workSetId, 'WORK-A');
+    const b = await seedWorkIssue(workSetId, 'WORK-B');
+    await createEdge(topic, a, containerType);
+    await createEdge(a, b, childrenType);
+    // 反向邊直插資料庫：createRelation 端點本身的禁環檢查會擋下這筆，
+    // 需繞過 API、直接寫壞資料才能重現「資料已壞」這個情境。
+    await pool.query(
+      `INSERT INTO issue_relations
+         (id, company_id, from_issue_id, to_issue_id, relation_type_id, ordinal, exclusive, created_on, updated_on)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [randomUUID(), session.companyId, b, a, childrenType, 0, true, 0, 0],
+    );
+
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId], displayLevel: 1 });
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe('RELATION_CYCLE');
   });
 
   // ---- 看板欄序 ----

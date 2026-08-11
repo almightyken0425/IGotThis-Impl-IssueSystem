@@ -12,3 +12,4 @@ export * from './types.js';
 export * from './relationTypeDefinition.js';
 export * from './relationIntegrity.js';
 export * from './issueLevel.js';
+export * from './switchDisplayLevel.js';

@@ -17,6 +17,7 @@ const EXPECTED_BEHAVIORS = [
   'checkIssueSetBoundary',
   'validateRelationCreation',
   'computeIssueLevel',
+  'switchDisplayLevel',
   // rollup
   'computeRollupValue',
   'resolveEffectiveMode',

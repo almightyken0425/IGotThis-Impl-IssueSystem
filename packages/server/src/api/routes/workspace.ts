@@ -15,8 +15,12 @@ import type {
   WorkflowTransitionInput,
 } from '../../db/repositories/index.js';
 import type { Executor } from '../../db/repositories/index.js';
-import { changeIssueStatus, formatIssueKey, invalid } from '../../domain/index.js';
-import type { StatusTransitionFailureCode, ValidationFailure } from '../../domain/index.js';
+import { changeIssueStatus, formatIssueKey, invalid, recordFieldChange } from '../../domain/index.js';
+import type {
+  FieldChangeInput,
+  StatusTransitionFailureCode,
+  ValidationFailure,
+} from '../../domain/index.js';
 import { isUniqueViolation, sendError, sendValidationFailure } from '../errors.js';
 
 // 前端工作區路由：/api/workspace 之下的預設工作區啟動與加值工單列表。
@@ -81,15 +85,22 @@ interface FieldSeed {
   readonly name: string;
   readonly label: string;
   readonly valueType: string;
+  readonly tracked: boolean;
 }
 
+/**
+ * 追蹤旗標依 spec no1_data_models/no3_field_model.md 的 StandardFieldCatalog：
+ * Status／Assignee／StoryPoint 表列「開」，精確命中；due 對應表列「開」的
+ * EndTime（MVP 把 StartTime/EndTime 簡化成單一 due 欄位，屬類比非精確同名）；
+ * title／resolution 表列「-」，維持不追蹤。
+ */
 const FIELD_SEEDS: readonly FieldSeed[] = [
-  { name: FIELD_TITLE, label: '標題', valueType: 'text' },
-  { name: FIELD_STATUS, label: '狀態', valueType: 'text' },
-  { name: FIELD_ASSIGNEE, label: '負責人', valueType: 'text' },
-  { name: FIELD_POINT, label: '點數', valueType: 'number' },
-  { name: FIELD_DUE, label: '到期日', valueType: 'date' },
-  { name: FIELD_RESOLUTION, label: '結案原因', valueType: 'text' },
+  { name: FIELD_TITLE, label: '標題', valueType: 'text', tracked: false },
+  { name: FIELD_STATUS, label: '狀態', valueType: 'text', tracked: true },
+  { name: FIELD_ASSIGNEE, label: '負責人', valueType: 'text', tracked: true },
+  { name: FIELD_POINT, label: '點數', valueType: 'number', tracked: true },
+  { name: FIELD_DUE, label: '到期日', valueType: 'date', tracked: true },
+  { name: FIELD_RESOLUTION, label: '結案原因', valueType: 'text', tracked: false },
 ];
 
 // ---- 對外形狀 ----
@@ -143,11 +154,34 @@ async function ensureIssueType(
         readonly: false,
         rollupable: false,
         rollupFn: null,
-        tracked: false,
+        tracked: seed.tracked,
         label: seed.label,
       };
       await fieldRepo.insertFieldDef(fieldDef, tx);
     }
+  }
+
+  // ChangeLog 為系統寫入的多筆欄位，供 recordFieldChange 追加記錄；
+  // issue_field_records 對 (company_id, field_name) 有外鍵指向 field_defs，
+  // 沒有這筆定義，appendChangeLog 會撞外鍵失敗。
+  const changeLogDef = await fieldRepo.findFieldDef(companyId, fieldRepo.CHANGE_LOG_FIELD_NAME, tx);
+  if (changeLogDef === undefined) {
+    await fieldRepo.insertFieldDef(
+      {
+        companyId,
+        name: fieldRepo.CHANGE_LOG_FIELD_NAME,
+        fieldSetName: DEFAULT_FIELD_SET,
+        kind: 'multi',
+        valueType: 'text',
+        system: true,
+        readonly: true,
+        rollupable: false,
+        rollupFn: null,
+        tracked: false,
+        label: '變更歷史',
+      },
+      tx,
+    );
   }
 
   const issueType = await issueRepo.createIssueType(
@@ -378,11 +412,12 @@ export const workspaceRoutes: FastifyPluginAsync<WorkspaceRoutesOptions> = async
     '/issues',
     { schema: { body: createIssueBodySchema } },
     async (request, reply) => {
-      const { companyId } = currentIdentity(request);
+      const { accountId, companyId } = currentIdentity(request);
       const context = await ensureWorkspace(pool, companyId);
       const body = request.body;
 
       const issue = await withTransaction(async (tx) => {
+        const now = Date.now();
         const seq = await containerRepo.takeNextSeq(companyId, context.issueSet.id, tx);
         const issueKey = formatIssueKey(context.issueSet.key, seq!);
         const created = await issueRepo.createIssue(
@@ -395,8 +430,13 @@ export const workspaceRoutes: FastifyPluginAsync<WorkspaceRoutesOptions> = async
           },
           tx,
         );
-        const setField = (name: string, value: unknown): Promise<unknown> =>
-          issueRepo.setFieldValue({ companyId, issueId: created.id, fieldName: name, value }, tx);
+        // 新建工單所有欄位都是從無到有；oldValue 一律 null，與 PATCH 走同一套
+        // recordFieldChange，不必為建立特判成另一個函式。
+        const changes: FieldChangeInput[] = [];
+        const setField = (name: string, value: unknown): Promise<unknown> => {
+          changes.push({ fieldName: name, oldValue: null, newValue: value });
+          return issueRepo.setFieldValue({ companyId, issueId: created.id, fieldName: name, value }, tx);
+        };
         await setField(FIELD_TITLE, body.title);
         await setField(FIELD_STATUS, body.status ?? DEFAULT_STATUS);
         if (body.assignee !== undefined && body.assignee !== '') {
@@ -404,6 +444,15 @@ export const workspaceRoutes: FastifyPluginAsync<WorkspaceRoutesOptions> = async
         }
         if (body.point !== undefined) await setField(FIELD_POINT, body.point);
         if (body.due !== undefined && body.due !== '') await setField(FIELD_DUE, body.due);
+
+        const fieldDefs = await fieldRepo.listFieldDefs(companyId, tx);
+        const entries = recordFieldChange({ changes, actor: accountId, now, fieldDefs });
+        for (const entry of entries) {
+          await fieldRepo.appendChangeLog(
+            { id: randomUUID(), companyId, issueId: created.id, entry, authorId: accountId, createdOn: now },
+            tx,
+          );
+        }
         return created;
       }, pool);
 
@@ -422,7 +471,7 @@ export const workspaceRoutes: FastifyPluginAsync<WorkspaceRoutesOptions> = async
     '/issues/:issueId',
     { schema: { params: issueIdParams, body: updateIssueBodySchema } },
     async (request, reply) => {
-      const { companyId } = currentIdentity(request);
+      const { accountId, companyId } = currentIdentity(request);
       const { issueId } = request.params;
       const body = request.body;
 
@@ -436,13 +485,20 @@ export const workspaceRoutes: FastifyPluginAsync<WorkspaceRoutesOptions> = async
         | { readonly ok: true };
 
       const outcome = await withTransaction<UpdateOutcome>(async (tx) => {
-        const write = (name: string, value: unknown): Promise<unknown> =>
-          issueRepo.setFieldValue({ companyId, issueId, fieldName: name, value }, tx);
-        const clear = (name: string): Promise<unknown> =>
-          issueRepo.deleteFieldValue(companyId, issueId, name, tx);
-
+        const now = Date.now();
         const fieldValues = await issueRepo.listFieldValues(companyId, issueId, tx);
         const byName = new Map(fieldValues.map((v) => [v.fieldName, v.value]));
+
+        const changes: FieldChangeInput[] = [];
+        const write = (name: string, value: unknown): Promise<unknown> => {
+          changes.push({ fieldName: name, oldValue: byName.get(name) ?? null, newValue: value });
+          return issueRepo.setFieldValue({ companyId, issueId, fieldName: name, value }, tx);
+        };
+        const clear = (name: string): Promise<unknown> => {
+          changes.push({ fieldName: name, oldValue: byName.get(name) ?? null, newValue: null });
+          return issueRepo.deleteFieldValue(companyId, issueId, name, tx);
+        };
+
         const currentStatus = asString(byName.get(FIELD_STATUS)) || DEFAULT_STATUS;
         const statusChanging = body.status !== undefined && body.status !== currentStatus;
 
@@ -498,6 +554,15 @@ export const workspaceRoutes: FastifyPluginAsync<WorkspaceRoutesOptions> = async
         }
         if (body.due !== undefined) {
           await (body.due === null || body.due === '' ? clear(FIELD_DUE) : write(FIELD_DUE, body.due));
+        }
+
+        const fieldDefs = await fieldRepo.listFieldDefs(companyId, tx);
+        const entries = recordFieldChange({ changes, actor: accountId, now, fieldDefs });
+        for (const entry of entries) {
+          await fieldRepo.appendChangeLog(
+            { id: randomUUID(), companyId, issueId, entry, authorId: accountId, createdOn: now },
+            tx,
+          );
         }
         return { ok: true };
       }, pool);

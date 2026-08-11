@@ -17,3 +17,4 @@ export * from './rollup/index.js';
 export * from './numbering/index.js';
 export * from './view/index.js';
 export * from './workflow/index.js';
+export * from './changelog/index.js';

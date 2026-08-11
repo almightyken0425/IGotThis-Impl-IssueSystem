@@ -40,6 +40,9 @@ const EXPECTED_BEHAVIORS = [
   'checkResolutionValueAllowed',
   'validateStatusTransition',
   'changeIssueStatus',
+  // changelog
+  'recordFieldChange',
+  'rebuildFieldStateAt',
   // shared
   'isWorkingDay',
   'differenceInWorkingDays',

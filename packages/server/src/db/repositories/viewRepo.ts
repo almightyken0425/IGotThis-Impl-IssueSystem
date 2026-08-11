@@ -169,6 +169,19 @@ export async function updateViewCalendarName(
   );
 }
 
+/** 更新檢視的顯示層級，對應 spec ViewLogic / switchDisplayLevel。 */
+export async function updateViewDisplayLevel(
+  exec: Executor,
+  companyId: string,
+  id: string,
+  displayLevel: number,
+): Promise<void> {
+  await exec.query(
+    `UPDATE views SET display_level = $3 WHERE company_id = $1 AND id = $2`,
+    [companyId, id, displayLevel],
+  );
+}
+
 /**
  * 指派工單於檢視的排序位置。
  * 未排序（無列）者新增，已排序者更新 sort_value；同檢視內每工單至多一筆。

@@ -22,9 +22,11 @@ import {
   buildKanbanColumns,
   computeIssueDuration,
   computeRollupValue,
+  RelationError,
   resolveViewCalendar,
   RollupError,
   SortPositionError,
+  switchDisplayLevel,
   WORK_LOG_FIELD_NAME,
 } from '../../domain/index.js';
 import type {
@@ -37,10 +39,12 @@ import type {
   IssueFilterCandidate,
   IssueTypeWorkflow,
   IsoDate,
+  RelationCandidate,
   RollupFieldValue,
   RollupRelation,
   RollupRelationType,
   RollupSnapshot,
+  WorkCalendar,
 } from '../../domain/index.js';
 import { sendError } from '../errors.js';
 
@@ -52,8 +56,9 @@ import { sendError } from '../errors.js';
 // - 彙總值用 computeRollupValue，快照自目標工單沿關聯下探的子樹組成（只用既有 repository 查詢）
 //   RollupError（欄位未定義 / 不可彙總 / 關聯成環）一律轉 422
 // - 檢視內容（/:id/issues）串 applyViewFilter → admitNewContainerIssue → resolveViewCalendar
-//   → computeIssueDuration 四個 domain 函式；回傳結果未經 filterViewByPermission 過濾，
-//   權限過濾屬 permission_system 模組，不在這輪範圍
+//   → computeIssueDuration → switchDisplayLevel 五個 domain 函式；回傳結果未經
+//   filterViewByPermission 過濾，權限過濾屬 permission_system 模組，不在這輪範圍。
+//   switchDisplayLevel 成環（RelationError RELATION_CYCLE）一律轉 422，比照 RollupError
 
 export interface ViewRoutesOptions {
   readonly pool: Pool;
@@ -70,7 +75,7 @@ const createViewBodySchema = {
     name: { type: 'string', minLength: 1, maxLength: 200 },
     viewType: { type: 'string', minLength: 1, maxLength: 50 },
     sourceMgmtIds: { type: 'array', items: { type: 'string', minLength: 1 } },
-    displayLevel: { type: 'integer' },
+    displayLevel: { type: 'integer', minimum: 1 },
     filterConfig: {},
     columnConfig: {},
     calendarName: { type: 'string', nullable: true },
@@ -84,6 +89,7 @@ const updateViewBodySchema = {
     columnConfig: {},
     filterConfig: {},
     calendarName: { type: 'string', nullable: true },
+    displayLevel: { type: 'integer', minimum: 1 },
   },
 } as const;
 
@@ -139,6 +145,7 @@ interface UpdateViewBody {
   readonly columnConfig?: unknown;
   readonly filterConfig?: unknown;
   readonly calendarName?: string | null;
+  readonly displayLevel?: number;
 }
 
 /** 組本 Company 的工單型別與流程狀態清單，供 buildKanbanColumns。 */
@@ -319,6 +326,94 @@ async function buildFilterCandidates(
 }
 
 /**
+ * 收集 switchDisplayLevel 的候選集：先取目標主題單沿 Container 關聯查得的工單
+ * （起點），再沿 Children 關聯 BFS 收集這些起點各自可達的全部子孫。
+ * relations 含 Container 起點邊與全部 Children 邊，直接餵給 switchDisplayLevel——
+ * computeIssueLevel 內部只認 childrenRelationTypeId 的邊，Container 邊不影響層級計算。
+ */
+async function collectDisplayLevelCandidates(
+  pool: Pool,
+  companyId: string,
+  topicIssueId: string,
+  containerTypeId: string,
+  childrenTypeId: string,
+): Promise<{ candidateIssueIds: string[]; relations: RelationCandidate[] }> {
+  const relations: RelationCandidate[] = [];
+  const candidateIds = new Set<string>();
+  const enqueued = new Set<string>();
+  const queue: string[] = [];
+
+  const containerEdges = await relationRepo.findRelationsFromIssue(
+    companyId,
+    topicIssueId,
+    containerTypeId,
+    pool,
+  );
+  for (const edge of containerEdges) {
+    relations.push({
+      fromIssueId: edge.fromIssueId,
+      toIssueId: edge.toIssueId,
+      relationTypeId: edge.relationTypeId,
+    });
+    candidateIds.add(edge.toIssueId);
+    if (!enqueued.has(edge.toIssueId)) {
+      enqueued.add(edge.toIssueId);
+      queue.push(edge.toIssueId);
+    }
+  }
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current === undefined) break;
+    const childEdges = await relationRepo.findRelationsFromIssue(companyId, current, childrenTypeId, pool);
+    for (const edge of childEdges) {
+      relations.push({
+        fromIssueId: edge.fromIssueId,
+        toIssueId: edge.toIssueId,
+        relationTypeId: edge.relationTypeId,
+      });
+      candidateIds.add(edge.toIssueId);
+      if (!enqueued.has(edge.toIssueId)) {
+        enqueued.add(edge.toIssueId);
+        queue.push(edge.toIssueId);
+      }
+    }
+  }
+
+  return { candidateIssueIds: [...candidateIds], relations };
+}
+
+/** 依 issue id 逐筆查基本資料，組成顯示層級內容呈現用的列。查無工單的 id 略過。 */
+async function buildLevelIssueRows(
+  pool: Pool,
+  companyId: string,
+  issueIds: readonly string[],
+  calendar: WorkCalendar | null,
+): Promise<{ id: string; key: string; title: string; duration: IssueDuration }[]> {
+  const rows: { id: string; key: string; title: string; duration: IssueDuration }[] = [];
+  for (const issueId of issueIds) {
+    const issue = await issueRepo.getIssue(companyId, issueId, pool);
+    if (issue === undefined) continue;
+    const values = await issueRepo.listFieldValues(companyId, issueId, pool);
+    const fields: Record<string, unknown> = {};
+    for (const value of values) {
+      fields[value.fieldName] = value.value;
+    }
+    rows.push({
+      id: issueId,
+      key: issue.issueKey,
+      title: asString(fields[FIELD_TITLE]),
+      duration: computeIssueDuration(
+        asIsoDateOrNull(fields[FIELD_START_TIME]),
+        asIsoDateOrNull(fields[FIELD_END_TIME]),
+        calendar,
+      ),
+    });
+  }
+  return rows;
+}
+
+/**
  * 把 Views.filterConfig（DB 存的未驗證 JSON）窄化成 FilterConfig。
  * fail-open：整體格式不符當無篩選條件；單一 condition 格式不符時跳過該條、
  * 其餘照常套用，不因一條寫壞就讓整張檢視的篩選失效。
@@ -427,6 +522,9 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
       if (request.body.calendarName !== undefined) {
         await viewRepo.updateViewCalendarName(pool, companyId, id, request.body.calendarName);
       }
+      if (request.body.displayLevel !== undefined) {
+        await viewRepo.updateViewDisplayLevel(pool, companyId, id, request.body.displayLevel);
+      }
       const updated = await viewRepo.getView(pool, companyId, id);
       return reply.status(200).send({ view: updated });
     },
@@ -522,8 +620,16 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
     readonly duration: IssueDuration;
   }
 
-  // 檢視資料來源展開、套用篩選、已排序/未排序分區、日曆與工期計算。
+  /** 主題單清單的一列，額外帶目前顯示層級（Views.displayLevel）展開出的內容。 */
+  interface TopicIssueRow extends ViewIssueRow {
+    readonly levelIssues: readonly ViewIssueRow[];
+  }
+
+  // 檢視資料來源展開、套用篩選、已排序/未排序分區、日曆與工期計算、顯示層級內容。
   // 回傳結果未經 filterViewByPermission 過濾（權限過濾屬 permission_system，不在這輪範圍）。查無檢視回 404。
+  // Container／Children 關聯型別若此 Company 尚未建立（無種子植入邏輯，需手動建立），
+  // 一律視為無層級內容，不把 undefined 傳進關聯查詢——那樣語意會從「查特定型別」
+  // 錯變成「查全部型別」，混入不相干工單。
   app.get<{ Params: { id: string } }>(
     '/:id/issues',
     { schema: { params: idParamsSchema } },
@@ -570,12 +676,50 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
         };
       };
 
-      return reply.status(200).send({
-        sortedIssues: sortedIds.map(toRow),
-        unsortedIssues: unsortedIds.map(toRow),
-        calendarName,
-        excludedCount: excludedIds.length,
-      });
+      const containerType = await relationRepo.findRelationTypeByName(companyId, 'Container', pool);
+      const childrenType = await relationRepo.findRelationTypeByName(companyId, 'Children', pool);
+
+      const levelIssuesOf = async (topicIssueId: string): Promise<ViewIssueRow[]> => {
+        if (containerType === undefined || childrenType === undefined) return [];
+        const { candidateIssueIds, relations } = await collectDisplayLevelCandidates(
+          pool,
+          companyId,
+          topicIssueId,
+          containerType.id,
+          childrenType.id,
+        );
+        const levelIds = switchDisplayLevel({
+          candidateIssueIds,
+          relations,
+          childrenRelationTypeId: childrenType.id,
+          targetLevel: view.displayLevel,
+        });
+        return buildLevelIssueRows(pool, companyId, levelIds, calendar);
+      };
+
+      const toTopicRows = async (issueIds: readonly string[]): Promise<TopicIssueRow[]> => {
+        const rows: TopicIssueRow[] = [];
+        for (const issueId of issueIds) {
+          rows.push({ ...toRow(issueId), levelIssues: await levelIssuesOf(issueId) });
+        }
+        return rows;
+      };
+
+      try {
+        const sortedIssues = await toTopicRows(sortedIds);
+        const unsortedIssues = await toTopicRows(unsortedIds);
+        return reply.status(200).send({
+          sortedIssues,
+          unsortedIssues,
+          calendarName,
+          excludedCount: excludedIds.length,
+        });
+      } catch (error: unknown) {
+        if (error instanceof RelationError) {
+          return sendError(reply, 422, error.code, error.message);
+        }
+        throw error;
+      }
     },
   );
 

@@ -14,6 +14,7 @@ import type { Executor } from './executor.js';
 import { getPool } from '../pool.js';
 import { run, runOne } from './executor.js';
 import type { FieldDef, FieldSetDef, IssueFieldRecord } from './types.js';
+import type { ChangeLogEntry } from '../../domain/index.js';
 
 // ============================================================
 // row 型別與 mapper
@@ -294,14 +295,8 @@ export async function deleteFieldRecord(
 /** ChangeLog 欄位名；變更歷史以此欄位名的多筆記錄承載。 */
 export const CHANGE_LOG_FIELD_NAME = 'ChangeLog';
 
-/** 一筆變更歷史的內容，對齊 spec 的固定結構 JSON（欄位名、舊值、新值、執行者、時間）。 */
-export interface ChangeLogEntry {
-  readonly fieldName: string;
-  readonly oldValue: unknown;
-  readonly newValue: unknown;
-  readonly actor: string;
-  readonly time: number;
-}
+/** 一筆變更歷史的內容；型別定義見 domain/changelog，本層不重造第二份。 */
+export type { ChangeLogEntry } from '../../domain/index.js';
 
 /** 追加一筆變更歷史的輸入。 */
 export interface AppendChangeLogInput {

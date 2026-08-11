@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { fieldRepo } from '../../db/repositories/index.js';
 import { authed, bootstrap, registerSession, testUrl, type Session } from './testHarness.js';
 
 /**
@@ -288,5 +289,82 @@ suite('workspace routes', () => {
     expect(otherList.statusCode).toBe(200);
     // 看不到 A 的工單。
     expect(otherList.json().issues).toHaveLength(0);
+  });
+
+  // ----- 變更歷史 -----
+
+  it('建立工單同時帶多個追蹤欄位，ChangeLog 對應筆數且 oldValue 為 null', async () => {
+    const created = (
+      await call({
+        method: 'POST',
+        url: '/api/workspace/issues',
+        payload: { title: 'A', status: '待處理', assignee: '陳彥廷', point: 3 },
+      })
+    ).json().issue;
+
+    const log = await fieldRepo.listChangeLog(session.companyId, created.id, pool);
+    // title 不追蹤，status/assignee/point 追蹤，due 未帶不產生。
+    expect(log).toHaveLength(3);
+    const byField = new Map(log.map((r) => [(r.value as { fieldName: string }).fieldName, r.value]));
+    expect(byField.get('status')).toMatchObject({ oldValue: null, newValue: '待處理' });
+    expect(byField.get('assignee')).toMatchObject({ oldValue: null, newValue: '陳彥廷' });
+    expect(byField.get('point')).toMatchObject({ oldValue: null, newValue: 3 });
+    expect(byField.has('title')).toBe(false);
+  });
+
+  it('PATCH 修改追蹤欄位，新增一筆且 oldValue 為原值', async () => {
+    const created = (
+      await call({
+        method: 'POST',
+        url: '/api/workspace/issues',
+        payload: { title: 'A', point: 3 },
+      })
+    ).json().issue;
+
+    await call({
+      method: 'PATCH',
+      url: `/api/workspace/issues/${created.id}`,
+      payload: { point: 5 },
+    });
+
+    const log = await fieldRepo.listChangeLog(session.companyId, created.id, pool);
+    const pointEntries = log
+      .map((r) => r.value as { fieldName: string; oldValue: unknown; newValue: unknown })
+      .filter((v) => v.fieldName === 'point');
+    expect(pointEntries).toHaveLength(2); // 建立時一筆（null→3）、PATCH 一筆（3→5）
+    expect(pointEntries[1]).toMatchObject({ oldValue: 3, newValue: 5 });
+  });
+
+  it('PATCH 只改不追蹤欄位（title），不新增 ChangeLog', async () => {
+    const created = (
+      await call({ method: 'POST', url: '/api/workspace/issues', payload: { title: 'A' } })
+    ).json().issue;
+    const before = await fieldRepo.listChangeLog(session.companyId, created.id, pool);
+
+    await call({
+      method: 'PATCH',
+      url: `/api/workspace/issues/${created.id}`,
+      payload: { title: 'A 改名' },
+    });
+
+    const after = await fieldRepo.listChangeLog(session.companyId, created.id, pool);
+    expect(after).toHaveLength(before.length);
+  });
+
+  it('驗證失敗的 PATCH 不留下任何 ChangeLog，交易整個 rollback', async () => {
+    const created = (
+      await call({ method: 'POST', url: '/api/workspace/issues', payload: { title: 'A' } })
+    ).json().issue;
+    const before = await fieldRepo.listChangeLog(session.companyId, created.id, pool);
+
+    const res = await call({
+      method: 'PATCH',
+      url: `/api/workspace/issues/${created.id}`,
+      payload: { status: '已完成', resolution: '已完成' }, // 待處理直接跳已完成，不合法轉換
+    });
+    expect(res.statusCode).toBe(422);
+
+    const after = await fieldRepo.listChangeLog(session.companyId, created.id, pool);
+    expect(after).toHaveLength(before.length);
   });
 });

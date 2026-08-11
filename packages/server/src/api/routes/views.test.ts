@@ -14,6 +14,7 @@ import { authed, bootstrap, registerSession, testUrl, type Session } from './tes
 const suite = testUrl ? describe : describe.skip;
 
 interface Containers {
+  readonly mgmtId: string;
   readonly issueSetId: string;
   readonly issueTypeId: string;
 }
@@ -49,7 +50,7 @@ async function seedContainers(pool: Pool, companyId: string): Promise<Containers
       [issueTypeId, companyId, 'task', 'Task', JSON.stringify([]), false],
     );
     await client.query('COMMIT');
-    return { issueSetId, issueTypeId };
+    return { mgmtId, issueSetId, issueTypeId };
   } catch (error: unknown) {
     await client.query('ROLLBACK');
     throw error;
@@ -90,11 +91,18 @@ suite('view routes', () => {
     containers = await seedContainers(pool, session.companyId);
   });
 
-  async function createView(name = 'My View'): Promise<{ id: string; ownerId: string }> {
+  async function createView(
+    name = 'My View',
+    overrides: Partial<{
+      sourceMgmtIds: readonly string[];
+      filterConfig: unknown;
+      calendarName: string | null;
+    }> = {},
+  ): Promise<{ id: string; ownerId: string }> {
     const res = await call({
       method: 'POST',
       url: '/api/views',
-      payload: { name, viewType: 'list', sourceMgmtIds: [], displayLevel: 0 },
+      payload: { name, viewType: 'list', sourceMgmtIds: [], displayLevel: 0, ...overrides },
     });
     expect(res.statusCode).toBe(201);
     return res.json().view;
@@ -303,6 +311,203 @@ suite('view routes', () => {
     );
     return viewId;
   }
+
+  // ---- 檢視內容 ----
+
+  async function setFieldValue(issueId: string, fieldName: string, value: unknown): Promise<void> {
+    await pool.query(
+      `INSERT INTO issue_field_values (company_id, issue_id, field_name, value, rollup_mode)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [session.companyId, issueId, fieldName, JSON.stringify(value), null],
+    );
+  }
+
+  async function seedCalendar(name: string, weeklyOff: readonly string[]): Promise<void> {
+    await pool.query(
+      'INSERT INTO calendar_definitions (company_id, name, weekly_off) VALUES ($1,$2,$3)',
+      [session.companyId, name, JSON.stringify(weeklyOff)],
+    );
+  }
+
+  /** 建第二個 Mgmt（各自獨立 Team/Product），在其主題單位置塞一個工單。 */
+  async function seedSecondMgmtWithIssue(): Promise<{ mgmtId: string; issueId: string }> {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const teamId = randomUUID();
+      const productId = randomUUID();
+      const mgmtId = randomUUID();
+      const issueSetId = randomUUID();
+      const issueId = randomUUID();
+      await client.query('INSERT INTO teams (id, company_id, name) VALUES ($1,$2,$3)', [
+        teamId,
+        session.companyId,
+        'T2',
+      ]);
+      await client.query(
+        'INSERT INTO products (id, company_id, team_id, name) VALUES ($1,$2,$3,$4)',
+        [productId, session.companyId, teamId, 'P2'],
+      );
+      await client.query(
+        'INSERT INTO mgmts (id, company_id, product_id, name, container_issue_set_id) VALUES ($1,$2,$3,$4,$5)',
+        [mgmtId, session.companyId, productId, 'M2', issueSetId],
+      );
+      await client.query(
+        'INSERT INTO issue_sets (id, company_id, mgmt_id, name, key) VALUES ($1,$2,$3,$4,$5)',
+        [issueSetId, session.companyId, mgmtId, 'Backlog2', 'PROJ2'],
+      );
+      await client.query(
+        'INSERT INTO issues (id, company_id, issue_set_id, issue_type_id, issue_key) VALUES ($1,$2,$3,$4,$5)',
+        [issueId, session.companyId, issueSetId, containers.issueTypeId, `PROJ2-${issueId.slice(0, 8)}`],
+      );
+      await client.query('COMMIT');
+      return { mgmtId, issueId };
+    } catch (error: unknown) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  function issueIds(res: { sortedIssues: { id: string }[]; unsortedIssues: { id: string }[] }): string[] {
+    return [...res.sortedIssues, ...res.unsortedIssues].map((row) => row.id);
+  }
+
+  it('檢視內容：檢視不存在回 404', async () => {
+    const res = await call({ method: 'GET', url: `/api/views/${randomUUID()}/issues` });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error.code).toBe('VIEW_NOT_FOUND');
+  });
+
+  it('資料來源為空：兩區皆空', async () => {
+    const view = await createView('Empty', { sourceMgmtIds: [] });
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ sortedIssues: [], unsortedIssues: [], excludedCount: 0 });
+  });
+
+  it('新建主題單未經排序：先進未排序區', async () => {
+    const issue = await seedIssue(pool, session.companyId, containers);
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId] });
+
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    const body = res.json();
+    expect(body.sortedIssues).toEqual([]);
+    expect(body.unsortedIssues.map((row: { id: string }) => row.id)).toEqual([issue]);
+  });
+
+  it('已排序項依 sortValue 升冪落 sortedIssues，其餘落未排序區', async () => {
+    const [a, b, c] = await seedThree();
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId] });
+    await place(view.id, a, 0);
+    await place(view.id, b, 1);
+
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    const body = res.json();
+    expect(body.sortedIssues.map((row: { id: string }) => row.id)).toEqual([a, b]);
+    expect(body.unsortedIssues.map((row: { id: string }) => row.id)).toEqual([c]);
+  });
+
+  it('sourceMgmtIds 含多個 Mgmt：各自主題單皆收進資料來源', async () => {
+    const first = await seedIssue(pool, session.companyId, containers);
+    const { mgmtId: mgmtId2, issueId: second } = await seedSecondMgmtWithIssue();
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId, mgmtId2] });
+
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    expect(issueIds(res.json()).sort()).toEqual([first, second].sort());
+  });
+
+  it('Mgmt 底下的一般工單集不計入，只收 containerIssueSetId 那份主題單位置', async () => {
+    const otherIssueSetId = randomUUID();
+    await pool.query(
+      'INSERT INTO issue_sets (id, company_id, mgmt_id, name, key) VALUES ($1,$2,$3,$4,$5)',
+      [otherIssueSetId, session.companyId, containers.mgmtId, 'Other', 'OTH'],
+    );
+    await pool.query(
+      'INSERT INTO issues (id, company_id, issue_set_id, issue_type_id, issue_key) VALUES ($1,$2,$3,$4,$5)',
+      [randomUUID(), session.companyId, otherIssueSetId, containers.issueTypeId, 'OTH-1'],
+    );
+    const containerIssue = await seedIssue(pool, session.companyId, containers);
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId] });
+
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    expect(issueIds(res.json())).toEqual([containerIssue]);
+  });
+
+  it('filterConfig 排除不符合條件的工單，excludedCount 反映排除數', async () => {
+    const keep = await seedIssue(pool, session.companyId, containers);
+    await setFieldValue(keep, 'title', 'keep-me');
+    const drop = await seedIssue(pool, session.companyId, containers);
+    await setFieldValue(drop, 'title', 'drop-me');
+
+    const view = await createView('V', {
+      sourceMgmtIds: [containers.mgmtId],
+      filterConfig: { conditions: [{ fieldName: 'title', operator: 'equals', value: 'keep-me' }] },
+    });
+
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    const body = res.json();
+    expect(issueIds(body)).toEqual([keep]);
+    expect(body.excludedCount).toBe(1);
+  });
+
+  it('filterConfig 格式不符：fail-open 視為不篩選', async () => {
+    const issue = await seedIssue(pool, session.companyId, containers);
+    const view = await createView('V', {
+      sourceMgmtIds: [containers.mgmtId],
+      filterConfig: 'not-an-object',
+    });
+
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    const body = res.json();
+    expect(issueIds(body)).toEqual([issue]);
+    expect(body.excludedCount).toBe(0);
+  });
+
+  it('檢視選用日曆時，回傳生效日曆名稱', async () => {
+    await seedCalendar('台灣', ['SAT', 'SUN']);
+    const view = await createView('V', {
+      sourceMgmtIds: [containers.mgmtId],
+      calendarName: '台灣',
+    });
+
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    expect(res.json().calendarName).toBe('台灣');
+  });
+
+  it('檢視未選用日曆、帳號亦無預設：calendarName 為 null', async () => {
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId] });
+
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    expect(res.json().calendarName).toBeNull();
+  });
+
+  it('工單缺 StartTime／EndTime：工期回 hasDuration false', async () => {
+    const issue = await seedIssue(pool, session.companyId, containers);
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId] });
+
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    const row = res.json().unsortedIssues[0];
+    expect(row.id).toBe(issue);
+    expect(row.duration).toEqual({ hasDuration: false });
+  });
+
+  it('工單有 StartTime／EndTime 且有生效日曆：工期以工作天計，扣除週末', async () => {
+    await seedCalendar('台灣', ['SAT', 'SUN']);
+    const issue = await seedIssue(pool, session.companyId, containers);
+    // 2026-01-05 為週一，2026-01-12 為週一，中間跨一個六日。
+    await setFieldValue(issue, 'StartTime', '2026-01-05');
+    await setFieldValue(issue, 'EndTime', '2026-01-12');
+    const view = await createView('V', {
+      sourceMgmtIds: [containers.mgmtId],
+      calendarName: '台灣',
+    });
+
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    const row = res.json().unsortedIssues[0];
+    expect(row.duration).toEqual({ hasDuration: true, days: 5, unit: 'workingDay' });
+  });
 
   // ---- 看板欄序 ----
 

@@ -5,21 +5,38 @@ import type { Pool } from 'pg';
 
 import { currentIdentity } from '../../auth/middleware.js';
 import { withTransaction } from '../../db/client.js';
-import { fieldRepo, issueRepo, relationRepo, viewRepo } from '../../db/repositories/index.js';
+import {
+  calendarRepo,
+  containerRepo,
+  fieldRepo,
+  issueRepo,
+  permissionRepo,
+  relationRepo,
+  viewRepo,
+} from '../../db/repositories/index.js';
 import type { View } from '../../db/repositories/index.js';
 import {
+  admitNewContainerIssue,
+  applyViewFilter,
   assignSortPosition,
   buildKanbanColumns,
+  computeIssueDuration,
   computeRollupValue,
+  resolveViewCalendar,
   RollupError,
   SortPositionError,
   WORK_LOG_FIELD_NAME,
 } from '../../domain/index.js';
 import type {
   FieldDef,
+  FilterConfig,
+  Issue,
+  IssueDuration,
   IssueFieldRecord,
   IssueFieldValue,
+  IssueFilterCandidate,
   IssueTypeWorkflow,
+  IsoDate,
   RollupFieldValue,
   RollupRelation,
   RollupRelationType,
@@ -27,13 +44,16 @@ import type {
 } from '../../domain/index.js';
 import { sendError } from '../errors.js';
 
-// 檢視路由：/api/views 之下的檢視 CRUD、看板欄序、彙總值計算。
+// 檢視路由：/api/views 之下的檢視 CRUD、看板欄序、彙總值計算、檢視內容組裝。
 //
 // 本層只做協定轉換：schema 驗輸入、帶租戶鍵呼叫 repository、把 domain 純函式的結果轉 HTTP。
 // domain 用法：
 // - 看板欄序用 buildKanbanColumns，輸入由本 Company 的工單型別與流程狀態組成
 // - 彙總值用 computeRollupValue，快照自目標工單沿關聯下探的子樹組成（只用既有 repository 查詢）
 //   RollupError（欄位未定義 / 不可彙總 / 關聯成環）一律轉 422
+// - 檢視內容（/:id/issues）串 applyViewFilter → admitNewContainerIssue → resolveViewCalendar
+//   → computeIssueDuration 四個 domain 函式；回傳結果未經 filterViewByPermission 過濾，
+//   權限過濾屬 permission_system 模組，不在這輪範圍
 
 export interface ViewRoutesOptions {
   readonly pool: Pool;
@@ -63,6 +83,7 @@ const updateViewBodySchema = {
   properties: {
     columnConfig: {},
     filterConfig: {},
+    calendarName: { type: 'string', nullable: true },
   },
 } as const;
 
@@ -117,6 +138,7 @@ interface CreateViewBody {
 interface UpdateViewBody {
   readonly columnConfig?: unknown;
   readonly filterConfig?: unknown;
+  readonly calendarName?: string | null;
 }
 
 /** 組本 Company 的工單型別與流程狀態清單，供 buildKanbanColumns。 */
@@ -238,6 +260,91 @@ function isRollupFieldValue(value: unknown): value is RollupFieldValue {
   return typeof value === 'number' || typeof value === 'string';
 }
 
+// ---- 檢視內容組裝（/:id/issues） ----
+
+/** 標題欄位名稱，對齊 workspace.ts 目前的種子欄位命名（小寫 title，非 spec 標準大寫名）。 */
+const FIELD_TITLE = 'title';
+/**
+ * spec 標準欄位名稱。MVP workspace 種子尚未提供 StartTime（見 workspace.ts 註解：
+ * StartTime/EndTime 簡化成單一 due 欄位），查得到值前 computeIssueDuration 恆回
+ * hasDuration: false，這是已知、非本端點造成的限制。
+ */
+const FIELD_START_TIME = 'StartTime';
+const FIELD_END_TIME = 'EndTime';
+
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function asIsoDateOrNull(value: unknown): IsoDate | null {
+  return typeof value === 'string' ? value : null;
+}
+
+/**
+ * 展開檢視的 sourceMgmtIds 成主題單全集：逐一取該 Mgmt 的主題單位置工單集
+ * （`Mgmts.containerIssueSetId`），收集其下工單。查無的 Mgmt id 略過不擲錯——
+ * 資料來源設定當下有效、事後 Mgmt 被刪不影響既有檢視繼續運作。
+ */
+async function collectContainerIssues(
+  pool: Pool,
+  companyId: string,
+  mgmtIds: readonly string[],
+): Promise<Issue[]> {
+  const issues: Issue[] = [];
+  for (const mgmtId of mgmtIds) {
+    const mgmt = await containerRepo.getMgmt(companyId, mgmtId, pool);
+    if (mgmt === undefined) continue;
+    const found = await issueRepo.listIssuesByIssueSet(companyId, mgmt.containerIssueSetId, pool);
+    issues.push(...found);
+  }
+  return issues;
+}
+
+/** 逐張工單查欄位單值，組成 applyViewFilter 的候選投影。 */
+async function buildFilterCandidates(
+  pool: Pool,
+  companyId: string,
+  issues: readonly Issue[],
+): Promise<IssueFilterCandidate[]> {
+  const candidates: IssueFilterCandidate[] = [];
+  for (const issue of issues) {
+    const values = await issueRepo.listFieldValues(companyId, issue.id, pool);
+    const fields: Record<string, unknown> = {};
+    for (const value of values) {
+      fields[value.fieldName] = value.value;
+    }
+    candidates.push({ issueId: issue.id, fields });
+  }
+  return candidates;
+}
+
+/**
+ * 把 Views.filterConfig（DB 存的未驗證 JSON）窄化成 FilterConfig。
+ * fail-open：整體格式不符當無篩選條件；單一 condition 格式不符時跳過該條、
+ * 其餘照常套用，不因一條寫壞就讓整張檢視的篩選失效。
+ */
+function parseFilterConfig(raw: unknown): FilterConfig | null {
+  if (raw === null || typeof raw !== 'object') return null;
+  const conditions = (raw as { conditions?: unknown }).conditions;
+  if (!Array.isArray(conditions)) return null;
+
+  const parsed = conditions.flatMap((item: unknown) => {
+    if (
+      typeof item === 'object' &&
+      item !== null &&
+      typeof (item as { fieldName?: unknown }).fieldName === 'string' &&
+      (item as { operator?: unknown }).operator === 'equals' &&
+      'value' in item
+    ) {
+      const condition = item as { fieldName: string; operator: 'equals'; value: unknown };
+      return [{ fieldName: condition.fieldName, operator: 'equals' as const, value: condition.value }];
+    }
+    return [];
+  });
+
+  return { conditions: parsed };
+}
+
 export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
   app: FastifyInstance,
   opts,
@@ -316,6 +423,9 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
       }
       if (request.body.filterConfig !== undefined) {
         await viewRepo.updateViewFilterConfig(pool, companyId, id, request.body.filterConfig);
+      }
+      if (request.body.calendarName !== undefined) {
+        await viewRepo.updateViewCalendarName(pool, companyId, id, request.body.calendarName);
       }
       const updated = await viewRepo.getView(pool, companyId, id);
       return reply.status(200).send({ view: updated });
@@ -399,6 +509,73 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
         }
         throw error;
       }
+    },
+  );
+
+  // ---- 檢視內容 ----
+
+  /** 檢視內容的一列：id 供互動、key／title／duration 供呈現。 */
+  interface ViewIssueRow {
+    readonly id: string;
+    readonly key: string;
+    readonly title: string;
+    readonly duration: IssueDuration;
+  }
+
+  // 檢視資料來源展開、套用篩選、已排序/未排序分區、日曆與工期計算。
+  // 回傳結果未經 filterViewByPermission 過濾（權限過濾屬 permission_system，不在這輪範圍）。查無檢視回 404。
+  app.get<{ Params: { id: string } }>(
+    '/:id/issues',
+    { schema: { params: idParamsSchema } },
+    async (request, reply) => {
+      const { companyId, accountId } = currentIdentity(request);
+      const view = await viewRepo.getView(pool, companyId, request.params.id);
+      if (view === undefined) {
+        return sendError(reply, 404, 'VIEW_NOT_FOUND', '檢視不存在');
+      }
+
+      const containerIssues = await collectContainerIssues(pool, companyId, view.sourceMgmtIds);
+      const candidates = await buildFilterCandidates(pool, companyId, containerIssues);
+      const { included, excludedIds } = applyViewFilter(candidates, parseFilterConfig(view.filterConfig));
+
+      const sortEntries = await viewRepo.listSortEntries(pool, companyId, view.id);
+      const { sortedIds, unsortedIds } = admitNewContainerIssue(
+        included.map((candidate) => candidate.issueId),
+        sortEntries,
+      );
+
+      const account = await permissionRepo.getAccount(pool, companyId, accountId);
+      const calendarName = resolveViewCalendar(view, {
+        defaultCalendarName: account?.defaultCalendarName ?? null,
+      });
+      const calendar =
+        calendarName === null
+          ? null
+          : ((await calendarRepo.getCalendar(pool, companyId, calendarName)) ?? null);
+
+      const candidateById = new Map(included.map((candidate) => [candidate.issueId, candidate]));
+      const issueById = new Map(containerIssues.map((issue) => [issue.id, issue]));
+
+      const toRow = (issueId: string): ViewIssueRow => {
+        const fields = candidateById.get(issueId)?.fields ?? {};
+        return {
+          id: issueId,
+          key: issueById.get(issueId)?.issueKey ?? '',
+          title: asString(fields[FIELD_TITLE]),
+          duration: computeIssueDuration(
+            asIsoDateOrNull(fields[FIELD_START_TIME]),
+            asIsoDateOrNull(fields[FIELD_END_TIME]),
+            calendar,
+          ),
+        };
+      };
+
+      return reply.status(200).send({
+        sortedIssues: sortedIds.map(toRow),
+        unsortedIssues: unsortedIds.map(toRow),
+        calendarName,
+        excludedCount: excludedIds.length,
+      });
     },
   );
 

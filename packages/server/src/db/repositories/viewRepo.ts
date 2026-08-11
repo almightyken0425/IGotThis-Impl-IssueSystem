@@ -156,6 +156,19 @@ export async function updateViewFilterConfig(
   );
 }
 
+/** 更新檢視的日曆選用；傳 null 代表取消選用，跟隨帳號的預設日曆。 */
+export async function updateViewCalendarName(
+  exec: Executor,
+  companyId: string,
+  id: string,
+  calendarName: string | null,
+): Promise<void> {
+  await exec.query(
+    `UPDATE views SET calendar_name = $3 WHERE company_id = $1 AND id = $2`,
+    [companyId, id, calendarName],
+  );
+}
+
 /**
  * 指派工單於檢視的排序位置。
  * 未排序（無列）者新增，已排序者更新 sort_value；同檢視內每工單至多一筆。

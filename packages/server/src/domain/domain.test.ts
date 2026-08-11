@@ -32,6 +32,11 @@ const EXPECTED_BEHAVIORS = [
   'takeNextSeq',
   // view
   'buildKanbanColumns',
+  'assignSortPosition',
+  'applyViewFilter',
+  'admitNewContainerIssue',
+  'resolveViewCalendar',
+  'computeIssueDuration',
   // workflow
   'checkTransitionAllowed',
   'checkActorRole',

@@ -22,6 +22,7 @@ import {
   buildKanbanColumns,
   computeIssueDuration,
   computeRollupValue,
+  expandDataSource,
   RelationError,
   resolveViewCalendar,
   RollupError,
@@ -67,14 +68,18 @@ export interface ViewRoutesOptions {
 
 // ---- 輸入 schema ----
 
+// 資料來源二擇一：直接給展開好的 sourceMgmtIds，或給組織範圍（scopeType + scopeId）
+// 讓伺服器端展開。兩者皆非必填，由 handler 判斷至少擇一，否則 400。
 const createViewBodySchema = {
   type: 'object',
-  required: ['name', 'viewType', 'sourceMgmtIds', 'displayLevel'],
+  required: ['name', 'viewType', 'displayLevel'],
   additionalProperties: false,
   properties: {
     name: { type: 'string', minLength: 1, maxLength: 200 },
     viewType: { type: 'string', minLength: 1, maxLength: 50 },
     sourceMgmtIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+    scopeType: { type: 'string', enum: ['team', 'product', 'mgmt'] },
+    scopeId: { type: 'string', minLength: 1 },
     displayLevel: { type: 'integer', minimum: 1 },
     filterConfig: {},
     columnConfig: {},
@@ -134,12 +139,53 @@ const sortBodySchema = {
 interface CreateViewBody {
   readonly name: string;
   readonly viewType: string;
-  readonly sourceMgmtIds: readonly string[];
+  readonly sourceMgmtIds?: readonly string[];
+  readonly scopeType?: 'team' | 'product' | 'mgmt';
+  readonly scopeId?: string;
   readonly displayLevel: number;
   readonly filterConfig?: unknown;
   readonly columnConfig?: unknown;
   readonly calendarName?: string | null;
 }
+
+/**
+ * 依組織範圍種類，走訪容器樹收集候選 Mgmt id（去重前的原始清單）。
+ * Team 範圍需對每個 Product 各查一次 Mgmt，逐一 await（比照本檔其餘接力查詢的既有風格）。
+ * 範圍節點查無或跨租戶時回 undefined——containerRepo 的查詢一律帶 companyId，
+ * 跨租戶天然查無，呼叫端把 undefined 轉 422，不會誤把它處理成「範圍為空」。
+ */
+async function collectScopeMgmtIds(
+  pool: Pool,
+  companyId: string,
+  scopeType: 'team' | 'product' | 'mgmt',
+  scopeId: string,
+): Promise<readonly string[] | undefined> {
+  if (scopeType === 'mgmt') {
+    const mgmt = await containerRepo.getMgmt(companyId, scopeId, pool);
+    return mgmt === undefined ? undefined : [mgmt.id];
+  }
+  if (scopeType === 'product') {
+    const product = await containerRepo.getProduct(companyId, scopeId, pool);
+    if (product === undefined) return undefined;
+    const mgmts = await containerRepo.listMgmtsByProduct(companyId, product.id, pool);
+    return mgmts.map((m) => m.id);
+  }
+  const team = await containerRepo.getTeam(companyId, scopeId, pool);
+  if (team === undefined) return undefined;
+  const products = await containerRepo.listProductsByTeam(companyId, team.id, pool);
+  const mgmtIds: string[] = [];
+  for (const product of products) {
+    const mgmts = await containerRepo.listMgmtsByProduct(companyId, product.id, pool);
+    mgmtIds.push(...mgmts.map((m) => m.id));
+  }
+  return mgmtIds;
+}
+
+const SCOPE_NOT_FOUND_CODE = {
+  team: 'TEAM_NOT_FOUND',
+  product: 'PRODUCT_NOT_FOUND',
+  mgmt: 'MGMT_NOT_FOUND',
+} as const;
 
 interface UpdateViewBody {
   readonly columnConfig?: unknown;
@@ -451,19 +497,63 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
   // ---- 檢視 CRUD ----
 
   // 建立檢視；擁有者為當前帳號。
+  // 資料來源二擇一、互斥：scopeType+scopeId 由伺服器端展開（expandDataSource）；
+  // 或直接帶已展開好的 sourceMgmtIds。以下皆回 400，不靜默猜測呼叫端意圖：
+  // - 都沒帶（MISSING_DATA_SOURCE）
+  // - scopeType／scopeId 只給一個（INCOMPLETE_SCOPE）
+  // - 完整 scope 與 sourceMgmtIds 同時帶（AMBIGUOUS_DATA_SOURCE）
   app.post<{ Body: CreateViewBody }>(
     '/',
     { schema: { body: createViewBodySchema } },
     async (request, reply) => {
       const { companyId, accountId } = currentIdentity(request);
       const body = request.body;
+
+      let sourceMgmtIds: readonly string[];
+      if ((body.scopeType === undefined) !== (body.scopeId === undefined)) {
+        return sendError(
+          reply,
+          400,
+          'INCOMPLETE_SCOPE',
+          'scopeType 與 scopeId 須同時提供',
+        );
+      } else if (body.scopeType !== undefined && body.scopeId !== undefined) {
+        if (body.sourceMgmtIds !== undefined) {
+          return sendError(
+            reply,
+            400,
+            'AMBIGUOUS_DATA_SOURCE',
+            '資料來源請擇一：scopeType 與 scopeId，或 sourceMgmtIds，不可同時提供',
+          );
+        }
+        const candidates = await collectScopeMgmtIds(pool, companyId, body.scopeType, body.scopeId);
+        if (candidates === undefined) {
+          return sendError(
+            reply,
+            422,
+            SCOPE_NOT_FOUND_CODE[body.scopeType],
+            '指定的組織範圍不存在',
+          );
+        }
+        sourceMgmtIds = expandDataSource({ mgmtIds: candidates });
+      } else if (body.sourceMgmtIds !== undefined) {
+        sourceMgmtIds = expandDataSource({ mgmtIds: body.sourceMgmtIds });
+      } else {
+        return sendError(
+          reply,
+          400,
+          'MISSING_DATA_SOURCE',
+          '須帶 sourceMgmtIds 或 scopeType 與 scopeId 之一',
+        );
+      }
+
       const view: View = {
         id: randomUUID(),
         companyId,
         name: body.name,
         ownerId: accountId,
         viewType: body.viewType,
-        sourceMgmtIds: [...body.sourceMgmtIds],
+        sourceMgmtIds: [...sourceMgmtIds],
         filterConfig: body.filterConfig ?? null,
         displayLevel: body.displayLevel,
         columnConfig: body.columnConfig ?? null,

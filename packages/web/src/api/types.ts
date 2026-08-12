@@ -67,3 +67,48 @@ export interface UpdateIssueInput {
   readonly point?: number | null;
   readonly due?: string | null;
 }
+
+/** 團隊。對齊 containerRepo 的 Team。 */
+export interface Team {
+  readonly id: string;
+  readonly companyId: string;
+  readonly name: string;
+}
+
+/** 產品。對齊 containerRepo 的 Product。 */
+export interface Product {
+  readonly id: string;
+  readonly companyId: string;
+  readonly teamId: string;
+  readonly name: string;
+}
+
+/** 管理域。對齊 containerRepo 的 Mgmt。 */
+export interface Mgmt {
+  readonly id: string;
+  readonly companyId: string;
+  readonly productId: string;
+  readonly name: string;
+  readonly containerIssueSetId: string;
+}
+
+/** 檢視。對齊 viewRepo 的 View。 */
+export interface View {
+  readonly id: string;
+  readonly companyId: string;
+  readonly name: string;
+  readonly ownerId: string;
+  readonly viewType: string;
+  readonly sourceMgmtIds: readonly string[];
+  readonly filterConfig: unknown;
+  readonly displayLevel: number;
+  readonly columnConfig: unknown;
+  readonly calendarName: string | null;
+}
+
+/** 建立檢視的輸入：資料來源以組織範圍表示，展開由後端 expandDataSource 執行。 */
+export interface CreateViewInput {
+  readonly name: string;
+  readonly scopeType: 'team' | 'product' | 'mgmt';
+  readonly scopeId: string;
+}

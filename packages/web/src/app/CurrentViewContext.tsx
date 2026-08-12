@@ -1,8 +1,9 @@
 // 當前檢視狀態 · 跨畫面共用的檢視選擇
 //
 // 角色：管理當前帳號名下的檢視清單與「當前選中哪一張」，供 AppShell 的
-// 選擇器 / 新增檢視使用；下一輪三個畫面改接 /api/views/:id/issues 時，
-// 直接從這裡讀 currentView，不必再改路由或殼層結構。
+// 選擇器 / 新增檢視使用。ListScreen／KanbanScreen 已接上，各自呼叫
+// /api/views/:id/workspace-issues；DevOrderScreen 待接時走另一支端點
+// /api/views/:id/issues（甘特圖座標系統另開獨立主題）。
 //
 // 不持久化：純 React state，重整頁面回到「清單非空即自動選第一張」——
 // Accounts 資料模型沒有 currentViewId 欄位，這輪不加後端狀態；

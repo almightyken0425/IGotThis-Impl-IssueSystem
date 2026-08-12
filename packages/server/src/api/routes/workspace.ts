@@ -22,6 +22,17 @@ import type {
   ValidationFailure,
 } from '../../domain/index.js';
 import { isUniqueViolation, sendError, sendValidationFailure } from '../errors.js';
+import {
+  asString,
+  foldWorkspaceIssueFields,
+  WORKSPACE_FIELD_ASSIGNEE as FIELD_ASSIGNEE,
+  WORKSPACE_FIELD_DUE as FIELD_DUE,
+  WORKSPACE_FIELD_POINT as FIELD_POINT,
+  WORKSPACE_FIELD_RESOLUTION as FIELD_RESOLUTION,
+  WORKSPACE_FIELD_STATUS as FIELD_STATUS,
+  WORKSPACE_FIELD_TITLE as FIELD_TITLE,
+} from '../workspaceIssueRow.js';
+import type { WorkspaceIssueRow } from '../workspaceIssueRow.js';
 
 // 前端工作區路由：/api/workspace 之下的預設工作區啟動與加值工單列表。
 //
@@ -52,14 +63,6 @@ const DEFAULT_TEAM_NAME = '預設團隊';
 const DEFAULT_PRODUCT_NAME = '預設產品';
 const DEFAULT_MGMT_NAME = '預設管理域';
 const DEFAULT_ISSUE_SET_NAME = '預設工單集';
-
-/** 加值列消費的欄位。名稱即工單欄位單值的 field_name，畫面依此摺疊。 */
-const FIELD_TITLE = 'title';
-const FIELD_STATUS = 'status';
-const FIELD_ASSIGNEE = 'assignee';
-const FIELD_POINT = 'point';
-const FIELD_DUE = 'due';
-const FIELD_RESOLUTION = 'resolution';
 
 /** 流程狀態：順序即 sortOrder，第一個為初始、最後一個為終止。 */
 const DEFAULT_STATES = ['待處理', '處理中', '審查中', '已完成'] as const;
@@ -112,18 +115,6 @@ interface WorkspaceContext {
   readonly issueType: Pick<IssueTypeDefinition, 'id' | 'name' | 'label'>;
   readonly statuses: readonly { readonly name: string; readonly isTerminal: boolean }[];
   readonly resolutionOptions: readonly { readonly value: string }[];
-}
-
-/** 工單 + 欄位單值摺疊而成的加值列，供清單 / 看板 / 開發順序表消費。 */
-interface WorkspaceIssueRow {
-  readonly id: string;
-  readonly key: string;
-  readonly title: string;
-  readonly status: string;
-  readonly assignee: string;
-  readonly point: number | null;
-  readonly due: string | null;
-  readonly resolution: string | null;
 }
 
 // ---- 啟動編排 ----
@@ -291,11 +282,7 @@ async function ensureWorkspace(pool: Pool, companyId: string): Promise<Workspace
 
 // ---- 加值列摺疊 ----
 
-function asString(value: unknown): string {
-  return typeof value === 'string' ? value : '';
-}
-
-/** 欄位是否算「已有值」，供 requiredFields 檢查與加值列摺疊共用。 */
+/** 欄位是否算「已有值」，供 requiredFields 檢查共用；跟摺列展示的欄位回退值是不同概念，不拉進共用模組。 */
 function hasFieldValue(value: unknown): boolean {
   return value !== null && value !== undefined && value !== '';
 }
@@ -307,20 +294,9 @@ async function foldIssueRow(
   issue: { id: string; issueKey: string },
 ): Promise<WorkspaceIssueRow> {
   const values = await issueRepo.listFieldValues(companyId, issue.id, pool);
-  const byName = new Map(values.map((v) => [v.fieldName, v.value]));
-  const pointRaw = byName.get(FIELD_POINT);
-  const dueRaw = byName.get(FIELD_DUE);
-  const resolutionRaw = byName.get(FIELD_RESOLUTION);
-  return {
-    id: issue.id,
-    key: issue.issueKey,
-    title: asString(byName.get(FIELD_TITLE)),
-    status: asString(byName.get(FIELD_STATUS)) || DEFAULT_STATUS,
-    assignee: asString(byName.get(FIELD_ASSIGNEE)),
-    point: typeof pointRaw === 'number' ? pointRaw : null,
-    due: typeof dueRaw === 'string' && dueRaw !== '' ? dueRaw : null,
-    resolution: typeof resolutionRaw === 'string' && resolutionRaw !== '' ? resolutionRaw : null,
-  };
+  const fields: Record<string, unknown> = {};
+  for (const v of values) fields[v.fieldName] = v.value;
+  return { id: issue.id, key: issue.issueKey, ...foldWorkspaceIssueFields(fields) };
 }
 
 // ---- 輸入 schema ----

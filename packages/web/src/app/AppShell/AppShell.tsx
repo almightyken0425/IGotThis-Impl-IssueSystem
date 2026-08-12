@@ -6,18 +6,18 @@
 // 對側 spec：no3_product_specs/no1_issue_system/no2_screens/no4_app_shell.md
 //   佈局四段與互動五條逐條對位。
 //
-// 已知落差（這輪刻意保留，下一輪三個畫面改接當前檢視時再處理）：
+// 已知落差：
 // - spec 的 selectCurrentView（ViewLogic）要求選了檢視後資料來源／篩選／欄位顯示
-//   設定／排序值都跟著切換，這輪完全沒有實作——CurrentViewContext 目前只是一個
-//   本地 React state（currentViewId），選擇動作不連動任何資料。「切換畫面形態時
-//   當前檢視不變」是這個架構自然的副作用（Provider 掛在 AppShell、不因路由換頁
-//   重新掛載），不是因為落地了 selectCurrentView 規則。
-// - 內容區不比照 design 在無檢視時切 EmptyState，維持無條件 <Outlet/>——這輪之前
-//   系統完全沒有建立 View 的入口，代表現在每個帳號名下的檢視清單必然是空的；若照
-//   design 機械式加上「無檢視擋內容區」，會讓現行三個可用畫面直接消失，是比「選了
-//   檢視畫面沒反應」嚴重得多的真倒退。
-// - 選了當前檢視後，三個工作畫面的內容不會跟著變（它們仍呼叫 workspaceApi，未改接
-//   /api/views/:id/issues），不加補償性提示——這是已核准的分階段限制，不是缺陷。
+//   設定／排序值都跟著切換，目前完全沒有實作——CurrentViewContext 只是一個
+//   本地 React state（currentViewId），選擇動作不連動任何資料；各畫面各自拿
+//   currentView.id 打自己的端點。「切換畫面形態時當前檢視不變」是這個架構自然的
+//   副作用（Provider 掛在 AppShell、不因路由換頁重新掛載），不是落地了
+//   selectCurrentView 規則。
+// - 內容區不比照 design 在無檢視時切 EmptyState，維持無條件 <Outlet/>——ListScreen／
+//   KanbanScreen 已各自在畫面內判斷 currentView === null 顯示空狀態，AppShell 層級
+//   不需要重複攔一次；DevOrderScreen 待接時比照辦理。
+// - DevOrderScreen 尚未改接當前檢視（仍呼叫 workspaceApi）——甘特圖需要的座標轉換
+//   （工單起訖日期換算時間軸格子、三層級同時載入）後端完全沒有，另開獨立主題處理。
 // - 新增檢視表單（AddViewForm）為 design 尚無定案的欄位細節，impl 補最小可用形。
 //
 // 主題切換：ThemeProvider 在更上層（App.tsx），本檔只提供切換入口。

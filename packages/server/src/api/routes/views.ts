@@ -48,6 +48,8 @@ import type {
   WorkCalendar,
 } from '../../domain/index.js';
 import { sendError } from '../errors.js';
+import { foldWorkspaceIssueFields } from '../workspaceIssueRow.js';
+import type { WorkspaceIssueRow } from '../workspaceIssueRow.js';
 
 // 檢視路由：/api/views 之下的檢視 CRUD、看板欄序、彙總值計算、檢視內容組裝。
 //
@@ -810,6 +812,36 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
         }
         throw error;
       }
+    },
+  );
+
+  // 檢視資料來源範圍內的完整欄位工單列，供 ListScreen／KanbanScreen 消費。
+  // 跟 /:id/issues（主題單視角，窄欄位、供 DevOrderScreen）是不同形狀，各自服務。
+  // 資料來源展開、套用篩選同一條鏈路，只是摺列换成完整欄位（title/status/
+  // assignee/point/due/resolution）。回傳結果未經 filterViewByPermission 過濾
+  // （原因同 /:id/issues：權限過濾屬 permission_system，不在這輪範圍）。
+  app.get<{ Params: { id: string } }>(
+    '/:id/workspace-issues',
+    { schema: { params: idParamsSchema } },
+    async (request, reply) => {
+      const { companyId } = currentIdentity(request);
+      const view = await viewRepo.getView(pool, companyId, request.params.id);
+      if (view === undefined) {
+        return sendError(reply, 404, 'VIEW_NOT_FOUND', '檢視不存在');
+      }
+
+      const containerIssues = await collectContainerIssues(pool, companyId, view.sourceMgmtIds);
+      const candidates = await buildFilterCandidates(pool, companyId, containerIssues);
+      const { included, excludedIds } = applyViewFilter(candidates, parseFilterConfig(view.filterConfig));
+
+      const issueById = new Map(containerIssues.map((issue) => [issue.id, issue]));
+      const issues: WorkspaceIssueRow[] = included.map((candidate) => ({
+        id: candidate.issueId,
+        key: issueById.get(candidate.issueId)?.issueKey ?? '',
+        ...foldWorkspaceIssueFields(candidate.fields),
+      }));
+
+      return reply.status(200).send({ issues, excludedCount: excludedIds.length });
     },
   );
 

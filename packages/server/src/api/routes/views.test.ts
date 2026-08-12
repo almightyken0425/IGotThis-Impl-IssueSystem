@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -14,6 +14,8 @@ import { authed, bootstrap, registerSession, testUrl, type Session } from './tes
 const suite = testUrl ? describe : describe.skip;
 
 interface Containers {
+  readonly teamId: string;
+  readonly productId: string;
   readonly mgmtId: string;
   readonly issueSetId: string;
   readonly issueTypeId: string;
@@ -50,7 +52,7 @@ async function seedContainers(pool: Pool, companyId: string): Promise<Containers
       [issueTypeId, companyId, 'task', 'Task', JSON.stringify([]), false],
     );
     await client.query('COMMIT');
-    return { mgmtId, issueSetId, issueTypeId };
+    return { teamId, productId, mgmtId, issueSetId, issueTypeId };
   } catch (error: unknown) {
     await client.query('ROLLBACK');
     throw error;
@@ -121,6 +123,250 @@ suite('view routes', () => {
   it('建立檢視回 201，擁有者為當前帳號', async () => {
     const view = await createView();
     expect(view.ownerId).toBe(session.accountId);
+  });
+
+  // ---- 資料來源展開（scopeType + scopeId，對應 spec ViewLogic / expandDataSource） ----
+
+  /** 在既有 containers.productId 下再建一個 Mgmt（同 Product、不同 Mgmt）。 */
+  async function seedSiblingMgmt(): Promise<string> {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const mgmtId = randomUUID();
+      const issueSetId = randomUUID();
+      await client.query(
+        'INSERT INTO mgmts (id, company_id, product_id, name, container_issue_set_id) VALUES ($1,$2,$3,$4,$5)',
+        [mgmtId, session.companyId, containers.productId, 'M-sibling', issueSetId],
+      );
+      await client.query(
+        'INSERT INTO issue_sets (id, company_id, mgmt_id, name, key) VALUES ($1,$2,$3,$4,$5)',
+        [issueSetId, session.companyId, mgmtId, 'Backlog-sibling', 'SIB'],
+      );
+      await client.query('COMMIT');
+      return mgmtId;
+    } catch (error: unknown) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /** 在既有 containers.teamId 下再建一個 Product + Mgmt（同 Team、不同 Product）。 */
+  async function seedSiblingProductWithMgmt(): Promise<{ productId: string; mgmtId: string }> {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const productId = randomUUID();
+      const mgmtId = randomUUID();
+      const issueSetId = randomUUID();
+      await client.query(
+        'INSERT INTO products (id, company_id, team_id, name) VALUES ($1,$2,$3,$4)',
+        [productId, session.companyId, containers.teamId, 'P-sibling'],
+      );
+      await client.query(
+        'INSERT INTO mgmts (id, company_id, product_id, name, container_issue_set_id) VALUES ($1,$2,$3,$4,$5)',
+        [mgmtId, session.companyId, productId, 'M-sibling-team', issueSetId],
+      );
+      await client.query(
+        'INSERT INTO issue_sets (id, company_id, mgmt_id, name, key) VALUES ($1,$2,$3,$4,$5)',
+        [issueSetId, session.companyId, mgmtId, 'Backlog-sibling-team', 'SIBT'],
+      );
+      await client.query('COMMIT');
+      return { productId, mgmtId };
+    } catch (error: unknown) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /** 建另一個 Company 底下的一個 Mgmt，供跨租戶測試。 */
+  /**
+   * container_issue_set_id 是 DEFERRABLE INITIALLY DEFERRED 外鍵，檢核時機是交易結束時；
+   * 裸 pool.query() 每句各自 autocommit，插入 mgmt 那句本身結束時 issue_set 還不存在就
+   * 會先丟外鍵違反，必須包在同一交易內（比照 seedSiblingMgmt 等既有 helper）。
+   */
+  async function seedForeignMgmt(): Promise<{ teamId: string; productId: string; mgmtId: string }> {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const companyId = randomUUID();
+      const teamId = randomUUID();
+      const productId = randomUUID();
+      const mgmtId = randomUUID();
+      const issueSetId = randomUUID();
+      await client.query('INSERT INTO companies (id, name) VALUES ($1,$2)', [companyId, 'Foreign Co']);
+      await client.query('INSERT INTO teams (id, company_id, name) VALUES ($1,$2,$3)', [
+        teamId,
+        companyId,
+        'Foreign T',
+      ]);
+      await client.query(
+        'INSERT INTO products (id, company_id, team_id, name) VALUES ($1,$2,$3,$4)',
+        [productId, companyId, teamId, 'Foreign P'],
+      );
+      await client.query(
+        'INSERT INTO mgmts (id, company_id, product_id, name, container_issue_set_id) VALUES ($1,$2,$3,$4,$5)',
+        [mgmtId, companyId, productId, 'Foreign M', issueSetId],
+      );
+      await client.query(
+        'INSERT INTO issue_sets (id, company_id, mgmt_id, name, key) VALUES ($1,$2,$3,$4,$5)',
+        [issueSetId, companyId, mgmtId, 'Foreign Backlog', 'FGN'],
+      );
+      await client.query('COMMIT');
+      return { teamId, productId, mgmtId };
+    } catch (error: unknown) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async function createViewWithScope(
+    scopeType: 'team' | 'product' | 'mgmt',
+    scopeId: string,
+  ): Promise<LightMyRequestResponse> {
+    return call({
+      method: 'POST',
+      url: '/api/views',
+      payload: { name: 'Scoped', viewType: 'list', displayLevel: 1, scopeType, scopeId },
+    });
+  }
+
+  it('scopeType mgmt：sourceMgmtIds 恰為該筆', async () => {
+    const res = await createViewWithScope('mgmt', containers.mgmtId);
+    expect(res.statusCode).toBe(201);
+    expect(res.json().view.sourceMgmtIds).toEqual([containers.mgmtId]);
+  });
+
+  it('scopeType product：sourceMgmtIds 為該 Product 下所有 Mgmt 的聯集', async () => {
+    const sibling = await seedSiblingMgmt();
+    const res = await createViewWithScope('product', containers.productId);
+    expect(res.statusCode).toBe(201);
+    expect(res.json().view.sourceMgmtIds.sort()).toEqual([containers.mgmtId, sibling].sort());
+  });
+
+  // 驗證接力查詢（Team → 各 Product → 各 Mgmt）本身有沒有漏查任何一個 Product；
+  // 不是驗證去重——products/mgmts 皆為單一 FK 歸屬，這個資料模型下兩個不同
+  // Product 結構上不可能指向同一個 Mgmt，本測試不會、也不需要走到去重分支。
+  // 去重邏輯（含合成重複 id 的情境）鎖在 expandDataSource.test.ts。
+  it('scopeType team：sourceMgmtIds 為該 Team 下所有 Product 的 Mgmt 聯集（接力查詢）', async () => {
+    const { mgmtId: siblingMgmtId } = await seedSiblingProductWithMgmt();
+    const res = await createViewWithScope('team', containers.teamId);
+    expect(res.statusCode).toBe(201);
+    expect(res.json().view.sourceMgmtIds.sort()).toEqual(
+      [containers.mgmtId, siblingMgmtId].sort(),
+    );
+  });
+
+  it('scopeType product：範圍下無任何 Mgmt 時，合法回空陣列', async () => {
+    const bareProductId = randomUUID();
+    await pool.query('INSERT INTO products (id, company_id, team_id, name) VALUES ($1,$2,$3,$4)', [
+      bareProductId,
+      session.companyId,
+      containers.teamId,
+      'P-bare',
+    ]);
+    const res = await createViewWithScope('product', bareProductId);
+    expect(res.statusCode).toBe(201);
+    expect(res.json().view.sourceMgmtIds).toEqual([]);
+  });
+
+  it('scopeType/scopeId 指向不存在的範圍：422 對應 NOT_FOUND code', async () => {
+    const mgmtRes = await createViewWithScope('mgmt', randomUUID());
+    expect(mgmtRes.statusCode).toBe(422);
+    expect(mgmtRes.json().error.code).toBe('MGMT_NOT_FOUND');
+
+    const productRes = await createViewWithScope('product', randomUUID());
+    expect(productRes.statusCode).toBe(422);
+    expect(productRes.json().error.code).toBe('PRODUCT_NOT_FOUND');
+
+    const teamRes = await createViewWithScope('team', randomUUID());
+    expect(teamRes.statusCode).toBe(422);
+    expect(teamRes.json().error.code).toBe('TEAM_NOT_FOUND');
+  });
+
+  it('scopeId 指向另一 Company 的範圍：視同不存在，422', async () => {
+    const foreign = await seedForeignMgmt();
+    const res = await createViewWithScope('mgmt', foreign.mgmtId);
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe('MGMT_NOT_FOUND');
+  });
+
+  it('不帶 sourceMgmtIds 也不帶 scopeType/scopeId：400', async () => {
+    const res = await call({
+      method: 'POST',
+      url: '/api/views',
+      payload: { name: 'NoSource', viewType: 'list', displayLevel: 1 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('MISSING_DATA_SOURCE');
+  });
+
+  it('scope 只給 scopeType 不給 scopeId：400 INCOMPLETE_SCOPE', async () => {
+    const res = await call({
+      method: 'POST',
+      url: '/api/views',
+      payload: { name: 'HalfScope', viewType: 'list', displayLevel: 1, scopeType: 'mgmt' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('INCOMPLETE_SCOPE');
+  });
+
+  it('scope 只給 scopeId 不給 scopeType：400 INCOMPLETE_SCOPE', async () => {
+    const res = await call({
+      method: 'POST',
+      url: '/api/views',
+      payload: { name: 'HalfScope', viewType: 'list', displayLevel: 1, scopeId: containers.mgmtId },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('INCOMPLETE_SCOPE');
+  });
+
+  it('完整 scope 與 sourceMgmtIds 同時帶：400 AMBIGUOUS_DATA_SOURCE，不靜默擇一', async () => {
+    const res = await call({
+      method: 'POST',
+      url: '/api/views',
+      payload: {
+        name: 'Ambiguous',
+        viewType: 'list',
+        displayLevel: 1,
+        scopeType: 'mgmt',
+        scopeId: containers.mgmtId,
+        sourceMgmtIds: [containers.mgmtId],
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('AMBIGUOUS_DATA_SOURCE');
+  });
+
+  it('scopeId 空字串：schema 層擋下，400 INVALID_INPUT', async () => {
+    const res = await call({
+      method: 'POST',
+      url: '/api/views',
+      payload: { name: 'Bad', viewType: 'list', displayLevel: 1, scopeType: 'mgmt', scopeId: '' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('INVALID_INPUT');
+  });
+
+  it('scopeType 不在合法列舉值內：schema 層擋下，400 INVALID_INPUT', async () => {
+    const res = await call({
+      method: 'POST',
+      url: '/api/views',
+      payload: {
+        name: 'Bad',
+        viewType: 'list',
+        displayLevel: 1,
+        scopeType: 'company',
+        scopeId: containers.mgmtId,
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('INVALID_INPUT');
   });
 
   it('列出自己擁有的檢視', async () => {

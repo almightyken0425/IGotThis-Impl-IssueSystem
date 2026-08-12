@@ -12,6 +12,8 @@ export { admitNewContainerIssue } from './admitNewContainerIssue.js';
 export type { ContainerIssuePartition } from './admitNewContainerIssue.js';
 export { applyViewFilter } from './applyViewFilter.js';
 export type { FilterResult } from './applyViewFilter.js';
+export { expandDataSource } from './expandDataSource.js';
+export type { OrgScopeCandidates } from './expandDataSource.js';
 export { buildKanbanColumns } from './kanbanColumns.js';
 export { computeIssueDuration } from './computeIssueDuration.js';
 export { resolveViewCalendar } from './resolveViewCalendar.js';

@@ -1,18 +1,32 @@
 // AppShell · 應用外殼
 //
-// 側邊導覽列切三個畫面，右側是路由出口。畫面本身不知道自己被掛在哪，
-// 外殼也不碰畫面內部狀態，兩者只透過路由相接。
+// 側邊四段：品牌、當前檢視、畫面形態導覽、帳號；右側是路由出口。
 //
-// design 對應：外殼在 design git 尚無定案的畫面檔——canvas 的 artboard 是把
-// 單一畫面裱起來看，沒有導覽殼。故本檔的組裝值集中在 SHELL_TOKENS，
-// 全部由既有 atomic 階梯組出、色彩全走當下 theme，等 design 出殼的定案再逐名對齊。
+// 來源：design git 的 `30_screens/no4_app_shell/no4_app_shell.jsx`。
+// 對側 spec：no3_product_specs/no1_issue_system/no2_screens/no4_app_shell.md
+//   佈局四段與互動五條逐條對位。
+//
+// 已知落差（這輪刻意保留，下一輪三個畫面改接當前檢視時再處理）：
+// - spec 的 selectCurrentView（ViewLogic）要求選了檢視後資料來源／篩選／欄位顯示
+//   設定／排序值都跟著切換，這輪完全沒有實作——CurrentViewContext 目前只是一個
+//   本地 React state（currentViewId），選擇動作不連動任何資料。「切換畫面形態時
+//   當前檢視不變」是這個架構自然的副作用（Provider 掛在 AppShell、不因路由換頁
+//   重新掛載），不是因為落地了 selectCurrentView 規則。
+// - 內容區不比照 design 在無檢視時切 EmptyState，維持無條件 <Outlet/>——這輪之前
+//   系統完全沒有建立 View 的入口，代表現在每個帳號名下的檢視清單必然是空的；若照
+//   design 機械式加上「無檢視擋內容區」，會讓現行三個可用畫面直接消失，是比「選了
+//   檢視畫面沒反應」嚴重得多的真倒退。
+// - 選了當前檢視後，三個工作畫面的內容不會跟著變（它們仍呼叫 workspaceApi，未改接
+//   /api/views/:id/issues），不加補償性提示——這是已核准的分階段限制，不是缺陷。
+// - 新增檢視表單（AddViewForm）為 design 尚無定案的欄位細節，impl 補最小可用形。
 //
 // 主題切換：ThemeProvider 在更上層（App.tsx），本檔只提供切換入口。
 
 import { NavLink, Outlet } from 'react-router';
+import { useState } from 'react';
 
-import { useAuth } from '../auth/AuthContext';
-import { Button } from '../components/controls';
+import { useAuth } from '../../auth/AuthContext';
+import { Button, Select } from '../../components/controls';
 import {
   BORDER_WIDTH,
   CONTROL_HEIGHT,
@@ -22,10 +36,12 @@ import {
   SPACING,
   TYPE_STYLES,
   useTheme,
-} from '../theme';
-import type { Theme } from '../theme';
-import { typeStyle } from '../screens/typeStyle';
-import { NAV_ITEMS } from './routes';
+} from '../../theme';
+import type { Theme } from '../../theme';
+import { typeStyle } from '../../screens/typeStyle';
+import { CurrentViewProvider, useCurrentView } from '../CurrentViewContext';
+import { NAV_ITEMS } from '../routes';
+import { AddViewForm } from './AddViewForm';
 
 const SHELL_TOKENS = {
   SIDEBAR_WIDTH: SPACING['3xl'] * 5, // 200
@@ -36,6 +52,8 @@ const SHELL_TOKENS = {
   BRAND_TYPE: TYPE_STYLES.sectionTitle,
   BRAND_META_TYPE: TYPE_STYLES.caption,
   BRAND_GAP: SPACING['2xs'],
+
+  GROUP_GAP: SPACING.sm,
 
   NAV_GAP: SPACING['2xs'],
   NAV_GROUP_TYPE: TYPE_STYLES.overline,
@@ -100,7 +118,68 @@ function NavItem({ theme, to, label }: NavItemProps) {
   );
 }
 
-export function AppShell() {
+function GroupLabel({ theme, children }: { readonly theme: Theme; readonly children: string }) {
+  return (
+    <span
+      style={{
+        ...typeStyle(S.NAV_GROUP_TYPE),
+        color: theme.text.tertiary,
+        padding: `0 ${S.NAV_ITEM_PADDING_X}px`,
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function CurrentViewSection({ theme }: { readonly theme: Theme }) {
+  const { views, currentView, selectView, loading, error, retry } = useCurrentView();
+  const [adding, setAdding] = useState(false);
+
+  // 三態：載入失敗（可重試）與「真的沒有檢視」文案不同，避免使用者把
+  // 一次可重試的載入失敗誤判成帳號下沒有任何檢視。
+  const emptyLabel =
+    error !== undefined ? '載入檢視失敗' : loading ? '載入中…' : '尚無檢視';
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: S.GROUP_GAP }}>
+      <GroupLabel theme={theme}>當前檢視</GroupLabel>
+      {views.length > 0 ? (
+        <Select
+          size="sm"
+          options={views.map((v) => ({ value: v.id, label: v.name }))}
+          {...(currentView !== null ? { value: currentView.id } : {})}
+          onChange={selectView}
+        />
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: S.NAV_GAP }}>
+          <span
+            role={error !== undefined ? 'alert' : undefined}
+            style={{
+              ...typeStyle(S.BRAND_META_TYPE),
+              color: error !== undefined ? theme.status.error_fg : theme.text.tertiary,
+              padding: `0 ${S.NAV_ITEM_PADDING_X}px`,
+            }}
+          >
+            {emptyLabel}
+          </span>
+          {error !== undefined && (
+            <Button variant="ghost" size="sm" fullWidth label="重試" onClick={retry} />
+          )}
+        </div>
+      )}
+      <Button
+        variant="secondary"
+        fullWidth
+        label="新增檢視"
+        onClick={() => setAdding((prev) => !prev)}
+      />
+      {adding && <AddViewForm onCancel={() => setAdding(false)} onCreated={() => setAdding(false)} />}
+    </div>
+  );
+}
+
+function AppShellInner() {
   const { theme, themeId, toggleTheme } = useTheme();
   const { account, logout } = useAuth();
 
@@ -125,6 +204,7 @@ export function AppShell() {
           padding: S.SIDEBAR_PADDING,
           background: theme.bg.surface,
           borderRight: `${S.SIDEBAR_BORDER_WIDTH}px solid ${theme.border.base}`,
+          overflowY: 'auto',
         }}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: S.BRAND_GAP, minWidth: 0 }}>
@@ -134,19 +214,13 @@ export function AppShell() {
           </span>
         </div>
 
+        <CurrentViewSection theme={theme} />
+
         <nav
           aria-label="主導覽"
           style={{ display: 'flex', flexDirection: 'column', gap: S.NAV_GAP, flex: 1 }}
         >
-          <span
-            style={{
-              ...typeStyle(S.NAV_GROUP_TYPE),
-              color: theme.text.tertiary,
-              padding: `0 ${S.NAV_ITEM_PADDING_X}px`,
-            }}
-          >
-            檢視
-          </span>
+          <GroupLabel theme={theme}>畫面</GroupLabel>
           {NAV_ITEMS.map((item) => (
             <NavItem key={item.path} theme={theme} to={item.path} label={item.label} />
           ))}
@@ -181,5 +255,13 @@ export function AppShell() {
         <Outlet />
       </main>
     </div>
+  );
+}
+
+export function AppShell() {
+  return (
+    <CurrentViewProvider>
+      <AppShellInner />
+    </CurrentViewProvider>
   );
 }

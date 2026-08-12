@@ -6,11 +6,13 @@
 // 來源：design git 的 `30_screens/no2_kanban_screen/no2_kanban_screen.jsx`。
 // 對側 spec：no3_product_specs/no1_issue_system/no2_screens/no2_kanban_screen.md
 //
-// 資料來源：改接真 API。欄由 /api/views/kanban-columns 取回，卡片由
-// /api/workspace/issues 取回並依 status 欄位分欄；拖入他欄即 PATCH 該工單 status。
-// 拖進終止欄先跳結案原因選單，通過 changeIssueStatus 驗證才落地；非終止欄
-// 仍直接送出，若後端 422 則行內提示、卡片留在原欄。design 的多資料來源不搬
-// ——單一工作區、狀態即欄。
+// 資料來源：欄由 /api/views/kanban-columns 取回（工作區層級，非依檢視資料來源
+// 算——spec 定義該依檢視資料來源涉及的工單型別算，MVP 只有一種工單型別看不出
+// 差異，這輪不修正）；卡片依當前檢視（CurrentViewContext）查
+// /api/views/:id/workspace-issues 並依 status 欄位分欄；拖入他欄即 PATCH 該
+// 工單 status。拖進終止欄先跳結案原因選單，通過 changeIssueStatus 驗證才落地；
+// 非終止欄仍直接送出，若後端 422 則行內提示、卡片留在原欄。無當前檢視時顯示
+// 空狀態，不發請求。design 的多資料來源不搬——單一工作區、狀態即欄。
 //
 // 消費元件：gantt/Toolbar、controls（TextInput / Button / Chip）、
 //           data（KanbanColumn / KanbanCard / EmptyState），
@@ -19,8 +21,9 @@
 import { useCallback, useMemo, useState } from 'react';
 import type { DragEvent } from 'react';
 
-import { ApiError, workspaceApi } from '../../api';
+import { ApiError, viewsApi, workspaceApi } from '../../api';
 import type { WorkspaceContext, WorkspaceIssue } from '../../api';
+import { useCurrentView } from '../../app/CurrentViewContext';
 import { Button, Chip, TextInput } from '../../components/controls';
 import { EmptyState, KanbanCard, KanbanColumn } from '../../components/data';
 import type { DueTone } from '../../components/data';
@@ -62,15 +65,17 @@ interface KanbanData {
 
 export function KanbanScreen() {
   const { theme } = useTheme();
+  const { currentView } = useCurrentView();
 
-  const fetcher = useCallback(async (): Promise<KanbanData> => {
+  const fetcher = useCallback(async (): Promise<KanbanData | null> => {
+    if (currentView === null) return null;
     const context = await workspaceApi.getWorkspace();
     const [columns, issues] = await Promise.all([
       workspaceApi.getKanbanColumns(),
-      workspaceApi.listIssues(),
+      viewsApi.getWorkspaceIssues(currentView.id),
     ]);
     return { context, columns, issues };
-  }, []);
+  }, [currentView]);
   const { data, loading, error, reload } = useAsync(fetcher);
 
   const [search, setSearch] = useState('');
@@ -227,7 +232,14 @@ export function KanbanScreen() {
         </span>
       </div>
 
-      {error !== undefined ? (
+      {currentView === null ? (
+        <div style={{ padding: `0 ${K.PADDING_X}px` }}>
+          <EmptyState
+            title="尚無檢視"
+            description="請先在左側「當前檢視」新增一張檢視，才能載入看板。"
+          />
+        </div>
+      ) : error !== undefined ? (
         <div style={{ padding: `0 ${K.PADDING_X}px` }}>
           <EmptyState
             icon="clock"

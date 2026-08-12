@@ -6,9 +6,13 @@
 // 來源：design git 的 `30_screens/no1_list_screen/no1_list_screen.jsx`。
 // 對側 spec：no3_product_specs/no1_issue_system/no2_screens/no1_list_screen.md
 //
-// 資料來源：改接真 API。工單列由 /api/workspace/issues 取回，狀態值集合由
-// /api/workspace 的流程狀態決定。原 design 的 variant 與假資料不搬——狀態差異
-// 由真實資料與互動產生。
+// 資料來源：依當前檢視（CurrentViewContext）查 /api/views/:id/workspace-issues，
+// 狀態值集合仍由 /api/workspace 的流程狀態決定（型別/流程定義是公司層級，非
+// 檢視層級）。無當前檢視（帳號名下尚無檢視）時顯示空狀態，不發請求。原 design
+// 的 variant 與假資料不搬——狀態差異由真實資料與互動產生。
+//
+// 已知限制：建立工單（submitCreate）寫入的是「工作區預設工單集」，不是當前
+// 檢視的資料來源；詳見 submitCreate 上方註解。
 //
 // 消費元件：
 //   gantt/Toolbar、controls（Select / Button / IconButton / Checkbox / TextInput）、
@@ -19,8 +23,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
-import { workspaceApi } from '../../api';
+import { viewsApi, workspaceApi } from '../../api';
 import type { WorkspaceContext, WorkspaceIssue } from '../../api';
+import { useCurrentView } from '../../app/CurrentViewContext';
 import { Button, Checkbox, IconButton, Select, TextInput } from '../../components/controls';
 import { DataTable, EmptyState } from '../../components/data';
 import type {
@@ -302,16 +307,21 @@ function CreateIssueBar({ theme, submitting, error, onSubmit, onCancel }: Create
 
 export function ListScreen() {
   const { theme } = useTheme();
+  const { currentView } = useCurrentView();
 
   const fetcher = useCallback(
-    async (): Promise<{ context: WorkspaceContext; issues: readonly WorkspaceIssue[] }> => {
+    async (): Promise<{ context: WorkspaceContext; issues: readonly WorkspaceIssue[] } | null> => {
+      if (currentView === null) return null;
       const [context, issues] = await Promise.all([
         workspaceApi.getWorkspace(),
-        workspaceApi.listIssues(),
+        viewsApi.getWorkspaceIssues(currentView.id),
       ]);
       return { context, issues };
     },
-    [],
+    // currentView 整個物件當依賴：CurrentViewContext 的 currentView 只在真正
+    // 切換/新增檢視時換新的物件參照（.find() 命中同一元素回同一參照），
+    // 不會被 ListScreen 自身 state（排序/選取列）誤觸發重抓。
+    [currentView],
   );
   const { data, loading, error, reload } = useAsync(fetcher);
 
@@ -366,6 +376,11 @@ export function ListScreen() {
   const effectiveGroupBy =
     groupBy !== LIST_GROUP_NONE && !hiddenColumns.includes(groupBy) ? groupBy : undefined;
 
+  // 已知限制：寫入的是「工作區預設工單集」（ensureWorkspace 決定的單一
+  // IssueSet），不是 currentView.sourceMgmtIds 指向的任意資料來源。目前前端
+  // 沒有建立額外 Team/Product/Mgmt 的入口（containers.ts 只封裝唯讀查詢），
+  // 每個 Company 只有一顆預設 Mgmt，新增檢視的組織範圍選擇必然以它為 scope，
+  // 兩者恆一致，這個邊界目前不可觸發。等前端開放建立多個 Mgmt 時需重新檢視。
   const submitCreate = useCallback(
     async (title: string) => {
       setCreating(true);
@@ -383,7 +398,7 @@ export function ListScreen() {
     [reload],
   );
 
-  const viewName = data?.context.issueSet.name ?? '工單清單';
+  const viewName = currentView?.name ?? '工單清單';
 
   const toolbarLeft: ReactNode = <ViewTitle theme={theme} name={viewName} count={allRows.length} />;
 
@@ -456,7 +471,12 @@ export function ListScreen() {
           />
         )}
 
-        {error !== undefined ? (
+        {currentView === null ? (
+          <EmptyState
+            title="尚無檢視"
+            description="請先在左側「當前檢視」新增一張檢視，才能載入工單清單。"
+          />
+        ) : error !== undefined ? (
           <EmptyState
             icon="clock"
             title="載入工單失敗"

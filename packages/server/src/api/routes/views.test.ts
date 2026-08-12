@@ -926,6 +926,84 @@ suite('view routes', () => {
     expect(res.json().error.code).toBe('RELATION_CYCLE');
   });
 
+  // ---- 檢視內容：完整欄位工單列（/:id/workspace-issues，供 ListScreen／KanbanScreen） ----
+
+  it('workspace-issues：檢視不存在回 404', async () => {
+    const res = await call({ method: 'GET', url: `/api/views/${randomUUID()}/workspace-issues` });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error.code).toBe('VIEW_NOT_FOUND');
+  });
+
+  it('workspace-issues：資料來源為空，issues 為空陣列、excludedCount 為 0', async () => {
+    const view = await createView('Empty', { sourceMgmtIds: [] });
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/workspace-issues` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ issues: [], excludedCount: 0 });
+  });
+
+  it('workspace-issues：摺出完整欄位（title/status/assignee/point/due/resolution）', async () => {
+    const issue = await seedIssue(pool, session.companyId, containers);
+    await setFieldValue(issue, 'title', '標題文字');
+    await setFieldValue(issue, 'status', '處理中');
+    await setFieldValue(issue, 'assignee', '成員甲');
+    await setFieldValue(issue, 'point', 3);
+    await setFieldValue(issue, 'due', '2026-09-01');
+    await setFieldValue(issue, 'resolution', '已完成');
+
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId] });
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/workspace-issues` });
+    expect(res.statusCode).toBe(200);
+    const row = res.json().issues.find((r: { id: string }) => r.id === issue);
+    expect(row).toMatchObject({
+      id: issue,
+      title: '標題文字',
+      status: '處理中',
+      assignee: '成員甲',
+      point: 3,
+      due: '2026-09-01',
+      resolution: '已完成',
+    });
+  });
+
+  it('workspace-issues：欄位全缺時，status 回退「待處理」、其餘為空字串或 null', async () => {
+    const issue = await seedIssue(pool, session.companyId, containers);
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId] });
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/workspace-issues` });
+    const row = res.json().issues.find((r: { id: string }) => r.id === issue);
+    expect(row).toMatchObject({
+      title: '',
+      status: '待處理',
+      assignee: '',
+      point: null,
+      due: null,
+      resolution: null,
+    });
+  });
+
+  it('workspace-issues：sourceMgmtIds 含多個 Mgmt，各自工單皆收進結果', async () => {
+    const first = await seedIssue(pool, session.companyId, containers);
+    const { mgmtId: mgmtId2, issueId: second } = await seedSecondMgmtWithIssue();
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId, mgmtId2] });
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/workspace-issues` });
+    const ids = res.json().issues.map((r: { id: string }) => r.id);
+    expect(ids.sort()).toEqual([first, second].sort());
+  });
+
+  it('workspace-issues：filterConfig 排除不符合條件的工單，excludedCount 反映排除數', async () => {
+    const keep = await seedIssue(pool, session.companyId, containers);
+    const drop = await seedIssue(pool, session.companyId, containers);
+    await setFieldValue(keep, 'status', '處理中');
+    await setFieldValue(drop, 'status', '已完成');
+    const view = await createView('V', {
+      sourceMgmtIds: [containers.mgmtId],
+      filterConfig: { conditions: [{ fieldName: 'status', operator: 'equals', value: '處理中' }] },
+    });
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/workspace-issues` });
+    const ids = res.json().issues.map((r: { id: string }) => r.id);
+    expect(ids).toEqual([keep]);
+    expect(res.json().excludedCount).toBe(1);
+  });
+
   // ---- 看板欄序 ----
 
   it('看板欄序由工單型別的流程狀態保序併入', async () => {

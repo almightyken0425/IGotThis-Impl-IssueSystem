@@ -25,6 +25,7 @@ export type {
   ViewSortEntry,
   WorkspaceContext,
   WorkspaceIssue,
+  WorkspaceIssuesResult,
   WorkspaceResolutionOption,
   WorkspaceStatus,
 } from './types';

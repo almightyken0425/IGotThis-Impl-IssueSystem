@@ -25,7 +25,7 @@ import { ApiError, viewsApi, workspaceApi } from '../../api';
 import type { WorkspaceContext, WorkspaceIssue } from '../../api';
 import { useCurrentView } from '../../app/CurrentViewContext';
 import { Button, Chip, TextInput } from '../../components/controls';
-import { EmptyState, KanbanCard, KanbanColumn } from '../../components/data';
+import { EmptyState, FilterNotice, KanbanCard, KanbanColumn } from '../../components/data';
 import type { DueTone } from '../../components/data';
 import { Toolbar } from '../../components/gantt';
 import { useAsync } from '../../hooks/useAsync';
@@ -61,6 +61,7 @@ interface KanbanData {
   readonly context: WorkspaceContext;
   readonly columns: readonly string[];
   readonly issues: readonly WorkspaceIssue[];
+  readonly permissionExcludedCount: number;
 }
 
 export function KanbanScreen() {
@@ -70,11 +71,16 @@ export function KanbanScreen() {
   const fetcher = useCallback(async (): Promise<KanbanData | null> => {
     if (currentView === null) return null;
     const context = await workspaceApi.getWorkspace();
-    const [columns, issues] = await Promise.all([
+    const [columns, workspaceIssues] = await Promise.all([
       workspaceApi.getKanbanColumns(),
       viewsApi.getWorkspaceIssues(currentView.id),
     ]);
-    return { context, columns, issues };
+    return {
+      context,
+      columns,
+      issues: workspaceIssues.issues,
+      permissionExcludedCount: workspaceIssues.permissionExcludedCount,
+    };
   }, [currentView]);
   const { data, loading, error, reload } = useAsync(fetcher);
 
@@ -310,6 +316,8 @@ export function KanbanScreen() {
           })}
         </div>
       )}
+
+      <FilterNotice count={data?.permissionExcludedCount} />
     </div>
   );
 }

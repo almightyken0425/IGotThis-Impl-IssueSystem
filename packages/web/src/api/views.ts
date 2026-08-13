@@ -6,7 +6,7 @@ import type {
   DevOrderIssuesResult,
   View,
   ViewSortEntry,
-  WorkspaceIssue,
+  WorkspaceIssuesResult,
 } from './types';
 
 /** 當前帳號名下的檢視清單。 */
@@ -17,11 +17,8 @@ export async function listMyViews(): Promise<readonly View[]> {
 
 /** 依檢視資料來源查完整欄位工單列（title/status/assignee/point/due/resolution），
  *  供 ListScreen／KanbanScreen 使用。跟主題單視角的 /:id/issues 是不同端點。 */
-export async function getWorkspaceIssues(viewId: string): Promise<readonly WorkspaceIssue[]> {
-  const res = await apiFetch<{ issues: readonly WorkspaceIssue[]; excludedCount: number }>(
-    `/api/views/${viewId}/workspace-issues`,
-  );
-  return res.issues;
+export async function getWorkspaceIssues(viewId: string): Promise<WorkspaceIssuesResult> {
+  return apiFetch<WorkspaceIssuesResult>(`/api/views/${viewId}/workspace-issues`);
 }
 
 /**

@@ -14,7 +14,8 @@
 //   EmptyState — 無資料空狀態
 //   FilterNotice — 權限過濾標示列
 //
-// 消費畫面：ListScreen 用表格線，KanbanScreen 用看板線，兩者共用 EmptyState 與 FilterNotice。
+// 消費畫面：ListScreen 用表格線，KanbanScreen 用看板線；三畫面（含 DevOrderScreen）
+// 共用 EmptyState 與 FilterNotice。
 //
 // 內部工具（internal.tsx）刻意不對外匯出，只有 EmptyState 的 icon 需要 GlyphName、
 // 故單獨放行這一個型別。

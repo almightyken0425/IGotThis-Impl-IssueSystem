@@ -18,12 +18,13 @@
 //   gantt/Toolbar、controls（Select / Button / IconButton / Checkbox / TextInput）、
 //   data（DataTable / EmptyState）。
 //
-// 排序、分組、欄位顯示設定皆為當次瀏覽狀態，存在 React state、不寫回檢視設定。
+// 排序、分組皆為當次瀏覽狀態，存在 React state、不寫回檢視設定。欄位顯示設定
+// （顯示哪幾欄／欄序／欄寬）會寫回 Views.columnConfig，見 columnConfig.ts。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
-import { viewsApi, workspaceApi } from '../../api';
+import { ApiError, viewsApi, workspaceApi } from '../../api';
 import type { WorkspaceContext, WorkspaceIssue } from '../../api';
 import { useCurrentView } from '../../app/CurrentViewContext';
 import { Button, Checkbox, IconButton, Select, TextInput } from '../../components/controls';
@@ -37,10 +38,26 @@ import type {
   TableRow,
 } from '../../components/data';
 import { Toolbar } from '../../components/gantt';
-import { controlShadow, FONT_FAMILY, NUMERIC_FONT_VARIANT, SPACING, useTheme } from '../../theme';
+import {
+  controlShadow,
+  DATA_DISPLAY_TOKENS,
+  FONT_FAMILY,
+  NUMERIC_FONT_VARIANT,
+  SPACING,
+  useTheme,
+} from '../../theme';
 import type { Theme } from '../../theme';
 import { useAsync } from '../../hooks/useAsync';
 import { typeStyle } from '../typeStyle';
+import {
+  columnsFromConfig,
+  moveColumnEntry,
+  parseColumnConfig,
+  resizeColumnEntry,
+  toColumnConfigJson,
+  toggleColumnEntry,
+} from './columnConfig';
+import type { ColumnConfigEntry } from './columnConfig';
 import {
   LIST_COLUMNS,
   LIST_DEFAULT_SORT,
@@ -51,6 +68,9 @@ import {
 import { LIST_SCREEN_TOKENS } from './tokens';
 
 const T = LIST_SCREEN_TOKENS;
+// 欄寬調整下限：沿用 DataTable 未指定欄寬時的同一個下界，兩者語意上是同一件事
+// ——欄寬不該小到不可用。
+const COLUMN_WIDTH_MIN = DATA_DISPLAY_TOKENS.TABLE.COLUMN_MIN_WIDTH;
 
 // ─── 狀態值 → 表格格 ─────────────────────────────────────────
 // 狀態的顯示順序與色彩身份由工作區流程狀態決定：終止狀態走 success，其餘依名稱
@@ -198,17 +218,40 @@ function ViewTitle({ theme, name, count }: ViewTitleProps) {
   );
 }
 
-// ─── ColumnVisibilityPanel ───────────────────────────────────
+// ─── ColumnConfigPanel ────────────────────────────────────────
+// 顯示/隱藏、順序（上下移動鈕）、寬度（+/- 鈕，僅目錄有數字寬度的欄開放）三組
+// 控制。可視欄依目前顯示順序渲染（不是固定目錄順序）——按上移/下移時面板列要
+// 跟著動，否則使用者看不出按鈕有反應。隱藏中的欄附加在最後，只給 checkbox。
+// 上下鈕重用既有 chevron-up/down glyph，寬度鈕重用既有 minus/plus glyph，皆已
+// 存在於 ControlGlyph，不新增視覺元素；面板本身的量體是既有的 impl 自訂範圍
+// （design 的欄位顯示設定只到「按鈕有 active 態」，見 tokens.ts 開頭註解）。
 
-interface ColumnVisibilityPanelProps {
+interface ColumnConfigPanelProps {
   readonly theme: Theme;
-  readonly columns: readonly TableColumn[];
-  readonly hidden: readonly string[];
+  readonly catalog: readonly TableColumn[];
+  readonly entries: readonly ColumnConfigEntry[];
+  readonly widthStep: number;
+  readonly widthMin: number;
+  readonly error: string | undefined;
   readonly onToggle: (key: string) => void;
+  readonly onMove: (key: string, direction: 'up' | 'down') => void;
+  readonly onWidthChange: (key: string, delta: number) => void;
 }
 
-function ColumnVisibilityPanel({ theme, columns, hidden, onToggle }: ColumnVisibilityPanelProps) {
-  const shownCount = columns.length - hidden.length;
+function ColumnConfigPanel({
+  theme,
+  catalog,
+  entries,
+  widthStep,
+  widthMin,
+  error,
+  onToggle,
+  onMove,
+  onWidthChange,
+}: ColumnConfigPanelProps) {
+  const visibleKeys = new Set(entries.map((entry) => entry.key));
+  const hiddenColumns = catalog.filter((column) => !visibleKeys.has(column.key));
+
   return (
     <div
       role="group"
@@ -233,21 +276,73 @@ function ColumnVisibilityPanel({ theme, columns, hidden, onToggle }: ColumnVisib
       <span style={{ ...typeStyle(T.COLUMN_PANEL_TITLE_TYPE), color: theme.text.secondary }}>
         欄位顯示設定
       </span>
-      {columns.map((column) => {
-        const visible = !hidden.includes(column.key);
+
+      {entries.map((entry, index) => {
+        const column = catalog.find((c) => c.key === entry.key);
+        if (column === undefined) return null;
+        const catalogWidth = typeof column.width === 'number' ? column.width : undefined;
+        const effectiveWidth = entry.width ?? catalogWidth;
         return (
-          <Checkbox
-            key={column.key}
-            label={column.label}
-            checked={visible}
-            disabled={visible && shownCount === 1}
-            onChange={() => onToggle(column.key)}
-          />
+          <div
+            key={entry.key}
+            style={{ display: 'flex', alignItems: 'center', gap: T.COLUMN_PANEL_ROW_GAP }}
+          >
+            <Checkbox
+              label={column.label}
+              checked
+              disabled={entries.length === 1}
+              onChange={() => onToggle(entry.key)}
+              style={{ flex: 1, minWidth: 0 }}
+            />
+            <IconButton
+              icon="chevron-up"
+              title={`上移${column.label}`}
+              size="sm"
+              disabled={index === 0}
+              onClick={() => onMove(entry.key, 'up')}
+            />
+            <IconButton
+              icon="chevron-down"
+              title={`下移${column.label}`}
+              size="sm"
+              disabled={index === entries.length - 1}
+              onClick={() => onMove(entry.key, 'down')}
+            />
+            {catalogWidth !== undefined && (
+              <>
+                <IconButton
+                  icon="minus"
+                  title={`縮小${column.label}欄寬`}
+                  size="sm"
+                  disabled={effectiveWidth !== undefined && effectiveWidth <= widthMin}
+                  onClick={() => onWidthChange(entry.key, -widthStep)}
+                />
+                <IconButton
+                  icon="plus"
+                  title={`加大${column.label}欄寬`}
+                  size="sm"
+                  onClick={() => onWidthChange(entry.key, widthStep)}
+                />
+              </>
+            )}
+          </div>
         );
       })}
-      <span style={{ ...typeStyle(T.COLUMN_PANEL_HINT_TYPE), color: theme.text.tertiary }}>
-        設定僅作用於當次瀏覽，不寫回檢視。
-      </span>
+
+      {hiddenColumns.map((column) => (
+        <Checkbox
+          key={column.key}
+          label={column.label}
+          checked={false}
+          onChange={() => onToggle(column.key)}
+        />
+      ))}
+
+      {error !== undefined && (
+        <span style={{ ...typeStyle(T.COLUMN_PANEL_HINT_TYPE), color: theme.status.error_fg }}>
+          {error}
+        </span>
+      )}
     </div>
   );
 }
@@ -307,7 +402,7 @@ function CreateIssueBar({ theme, submitting, error, onSubmit, onCancel }: Create
 
 export function ListScreen() {
   const { theme } = useTheme();
-  const { currentView } = useCurrentView();
+  const { currentView, updateView } = useCurrentView();
 
   const fetcher = useCallback(
     async (): Promise<
@@ -329,24 +424,37 @@ export function ListScreen() {
         permissionExcludedCount: workspaceIssues.permissionExcludedCount,
       };
     },
-    // currentView 整個物件當依賴：CurrentViewContext 的 currentView 只在真正
-    // 切換/新增檢視時換新的物件參照（.find() 命中同一元素回同一參照），
-    // 不會被 ListScreen 自身 state（排序/選取列）誤觸發重抓。
-    [currentView],
+    // 只用到 currentView.id：換一張檢視（id 變）才需要重抓整份工單清單。
+    // 不能拿整個 currentView 物件當依賴——persistColumnConfig 存檔後會觸發
+    // CurrentViewContext 的 reload，讓 currentView 換成新物件參照（id 不變、
+    // 只有 columnConfig 變），若依賴整個物件會被誤判成「換檢視」，白白多打一次
+    // workspace 與 workspace-issues 兩支 API 重抓整份工單清單。
+    [currentView?.id],
   );
   const { data, loading, error, reload } = useAsync(fetcher);
 
-  // 當次瀏覽狀態。
+  // 當次瀏覽狀態：排序、分組不寫回。
   const [sort, setSort] = useState<SortState | null>(LIST_DEFAULT_SORT);
   const [groupBy, setGroupBy] = useState<string>(LIST_GROUP_NONE);
   const [selectedIds, setSelectedIds] = useState<readonly string[]>([]);
-  const [hiddenColumns, setHiddenColumns] = useState<readonly string[]>([]);
+
+  // 欄位顯示設定草稿：初始值與切換檢視時都由 currentView.columnConfig 解析；
+  // 每次互動立即反映在畫面上（樂觀更新），同時觸發 persistColumnConfig 寫回。
+  const [columnConfigDraft, setColumnConfigDraft] = useState<readonly ColumnConfigEntry[]>(() =>
+    parseColumnConfig(currentView?.columnConfig, LIST_COLUMNS),
+  );
+  const [saveError, setSaveError] = useState<string | undefined>(undefined);
   const [columnPanelOpen, setColumnPanelOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | undefined>(undefined);
 
   const columnPanelAnchor = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setColumnConfigDraft(parseColumnConfig(currentView?.columnConfig, LIST_COLUMNS));
+    setSaveError(undefined);
+  }, [currentView?.id]);
 
   useEffect(() => {
     if (!columnPanelOpen) return undefined;
@@ -372,20 +480,69 @@ export function ListScreen() {
   const rows = useMemo(() => sortRows(allRows, sort), [allRows, sort]);
 
   const columns = useMemo(
-    () => LIST_COLUMNS.filter((column) => !hiddenColumns.includes(column.key)),
-    [hiddenColumns],
+    () => columnsFromConfig(columnConfigDraft, LIST_COLUMNS),
+    [columnConfigDraft],
   );
 
-  const toggleColumn = useCallback((key: string) => {
-    setHiddenColumns((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
-  }, []);
+  // 樂觀更新：本地草稿立即反映，失敗只記錯誤不回滾——使用者已經看到變更生效，
+  // 回滾會製造「明明點了卻又跳回去」的錯覺，錯誤訊息已足夠交代狀況。
+  const persistColumnConfig = useCallback(
+    async (next: readonly ColumnConfigEntry[]) => {
+      if (currentView === null) return;
+      setSaveError(undefined);
+      try {
+        await updateView(currentView.id, { columnConfig: toColumnConfigJson(next) });
+      } catch (err: unknown) {
+        setSaveError(err instanceof ApiError ? err.message : '欄位顯示設定儲存失敗');
+      }
+    },
+    [currentView, updateView],
+  );
+
+  // 三個 handler 直接讀 closure 內的 columnConfigDraft（列進 useCallback 依賴），
+  // 不包在 setState 的函式型更新裡——main.tsx 有 <StrictMode>，若把
+  // persistColumnConfig 這類副作用混進 updater，開發模式下會被重複呼叫兩次，
+  // 對同一次點擊多打一支重複的 PATCH。
+  const toggleColumn = useCallback(
+    (key: string) => {
+      const next = toggleColumnEntry(columnConfigDraft, key, LIST_COLUMNS);
+      if (next === columnConfigDraft) return;
+      setColumnConfigDraft(next);
+      void persistColumnConfig(next);
+    },
+    [columnConfigDraft, persistColumnConfig],
+  );
+
+  const moveColumn = useCallback(
+    (key: string, direction: 'up' | 'down') => {
+      const next = moveColumnEntry(columnConfigDraft, key, direction);
+      if (next === columnConfigDraft) return;
+      setColumnConfigDraft(next);
+      void persistColumnConfig(next);
+    },
+    [columnConfigDraft, persistColumnConfig],
+  );
+
+  const adjustColumnWidth = useCallback(
+    (key: string, delta: number) => {
+      const next = resizeColumnEntry(columnConfigDraft, key, delta, LIST_COLUMNS, COLUMN_WIDTH_MIN);
+      if (next === columnConfigDraft) return;
+      setColumnConfigDraft(next);
+      void persistColumnConfig(next);
+    },
+    [columnConfigDraft, persistColumnConfig],
+  );
 
   const onRowSelect = useCallback((row: TableRow) => {
     setSelectedIds((ids) => (ids.includes(row.id) ? [] : [row.id]));
   }, []);
 
+  const visibleColumnKeys = useMemo(
+    () => new Set(columnConfigDraft.map((entry) => entry.key)),
+    [columnConfigDraft],
+  );
   const effectiveGroupBy =
-    groupBy !== LIST_GROUP_NONE && !hiddenColumns.includes(groupBy) ? groupBy : undefined;
+    groupBy !== LIST_GROUP_NONE && visibleColumnKeys.has(groupBy) ? groupBy : undefined;
 
   // 已知限制：寫入的是「工作區預設工單集」（ensureWorkspace 決定的單一
   // IssueSet），不是 currentView.sourceMgmtIds 指向的任意資料來源。目前前端
@@ -433,14 +590,20 @@ export function ListScreen() {
           icon="columns"
           title="欄位顯示設定"
           active={columnPanelOpen}
+          disabled={currentView === null}
           onClick={() => setColumnPanelOpen((open) => !open)}
         />
         {columnPanelOpen && (
-          <ColumnVisibilityPanel
+          <ColumnConfigPanel
             theme={theme}
-            columns={LIST_COLUMNS}
-            hidden={hiddenColumns}
+            catalog={LIST_COLUMNS}
+            entries={columnConfigDraft}
+            widthStep={T.COLUMN_PANEL_WIDTH_STEP}
+            widthMin={COLUMN_WIDTH_MIN}
+            error={saveError}
             onToggle={toggleColumn}
+            onMove={moveColumn}
+            onWidthChange={adjustColumnWidth}
           />
         )}
       </div>

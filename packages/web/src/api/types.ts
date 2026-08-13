@@ -113,6 +113,14 @@ export interface CreateViewInput {
   readonly scopeId: string;
 }
 
+/** 更新檢視的輸入：帶到的欄位就寫、未帶不動，對齊後端 PATCH /api/views/:id 的 body 契約。 */
+export interface UpdateViewInput {
+  readonly columnConfig?: unknown;
+  readonly filterConfig?: unknown;
+  readonly calendarName?: string | null;
+  readonly displayLevel?: number;
+}
+
 /** 甘特橫軸的一個日曆天。對齊 devOrderGantt.ts 的 GanttDay，後端一律回滿八個欄位。 */
 export interface GanttDay {
   readonly key: string;

@@ -13,7 +13,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from 'react';
 
 import { viewsApi } from '../api';
-import type { CreateViewInput, View } from '../api';
+import type { CreateViewInput, UpdateViewInput, View } from '../api';
 import { useAsync } from '../hooks/useAsync';
 
 interface CurrentViewContextValue {
@@ -23,6 +23,9 @@ interface CurrentViewContextValue {
   readonly currentView: View | null;
   readonly selectView: (id: string) => void;
   readonly addView: (input: CreateViewInput) => Promise<void>;
+  /** 更新既有檢視（如 columnConfig）。不切換 currentViewId——改設定不該連帶換掉
+   *  目前選中的檢視，這點是它與 addView 唯一的行為差異。 */
+  readonly updateView: (id: string, patch: UpdateViewInput) => Promise<void>;
   /** 首次載入失敗時重試；成功後與「真的沒有檢視」在畫面上才不會顯示成同一種空狀態。 */
   readonly retry: () => void;
 }
@@ -39,12 +42,16 @@ export function CurrentViewProvider({ children }: { readonly children: ReactNode
   // 這筆新資料時，被下面的自動選擇邏輯誤判成「當前選定不在清單內」而覆蓋掉。
   const [pendingView, setPendingView] = useState<View | null>(null);
 
+  // upsert：pendingView 的 id 已在 base 內（updateView 情境）就地替換，
+  // 否則附加（addView 情境）——append-only 會讓「更新既有檢視」的樂觀更新
+  // 悄悄失效，因為 append 的判斷條件本來就恆假。
   const views = useMemo<readonly View[]>(() => {
     const base = data ?? [];
-    if (pendingView !== null && !base.some((v) => v.id === pendingView.id)) {
-      return [...base, pendingView];
-    }
-    return base;
+    if (pendingView === null) return base;
+    const index = base.findIndex((v) => v.id === pendingView.id);
+    return index === -1
+      ? [...base, pendingView]
+      : base.map((v, i) => (i === index ? pendingView : v));
   }, [data, pendingView]);
 
   // pendingView 真的出現在伺服器清單後，本地補的那筆就沒用了，清掉避免疊加。
@@ -72,6 +79,15 @@ export function CurrentViewProvider({ children }: { readonly children: ReactNode
     [reload],
   );
 
+  const updateView = useCallback(
+    async (id: string, patch: UpdateViewInput) => {
+      const updated = await viewsApi.updateView(id, patch);
+      setPendingView(updated);
+      await reload();
+    },
+    [reload],
+  );
+
   const currentView = views.find((v) => v.id === currentViewId) ?? null;
 
   const value: CurrentViewContextValue = {
@@ -81,6 +97,7 @@ export function CurrentViewProvider({ children }: { readonly children: ReactNode
     currentView,
     selectView: setCurrentViewId,
     addView,
+    updateView,
     retry: () => void reload(),
   };
 

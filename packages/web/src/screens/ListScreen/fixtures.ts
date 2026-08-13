@@ -9,7 +9,9 @@
 //   LIST_SOURCES              檢視的 sourceMgmtIds 選項
 //   LIST_ROWS                 applyViewFilter + filterViewByPermission 的產出
 //   LIST_PERMISSION_FILTERED  filterViewByPermission 濾掉的筆數
-//   LIST_COLUMNS              檢視的 columnConfig
+//   LIST_COLUMNS              欄位目錄與預設值，不隨檢視改變——實際顯示哪幾欄、
+//                             順序、寬度由 currentView.columnConfig 決定，解析與
+//                             映射見同資料夾 columnConfig.ts
 //   LIST_FILTERS              檢視的 filterConfig 的視覺投影
 //
 // design 端的 LIST_SCREEN_VARIANTS 不搬：variant 是 canvas 並排比較用的裝置，
@@ -232,8 +234,14 @@ export const LIST_ROWS: readonly ListIssueRow[] = [
  */
 export const LIST_PERMISSION_FILTERED = 2;
 
-// ─── 欄位顯示設定 ────────────────────────────────────────────
-// 顯示哪幾欄、欄的先後、欄寬。欄標題顯示欄位定義的 label。
+// ─── 欄位目錄 ────────────────────────────────────────────────
+// 全部可用欄位與各自的預設寬度，供 columnConfig.ts 解析檢視設定時查回
+// label/type/align/sortable 等渲染 metadata；順序即「全欄顯示」時的預設順序。
+//
+// 已知限制：label 為寫死中文，未接 FieldDefs.label（spec 定義欄標題該顯示欄位
+// 定義的 label，可被使用者客製）。前端目前無 fields API client，MVP 單 Company、
+// 未有人客製過欄位標籤的情境下，寫死值與 FieldDefs 種子資料的 label 結果一致；
+// 待前端出現 fields 資料流且有實際客製標籤需求時再接上動態值。
 
 export const LIST_COLUMNS: readonly TableColumn[] = [
   { key: 'key', label: '編號', type: 'key', width: LIST_SCREEN_TOKENS.COLUMN_WIDTH.key, sortable: true },

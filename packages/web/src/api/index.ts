@@ -21,6 +21,7 @@ export type {
   Team,
   TopicIssueRow,
   UpdateIssueInput,
+  UpdateViewInput,
   View,
   ViewSortEntry,
   WorkspaceContext,

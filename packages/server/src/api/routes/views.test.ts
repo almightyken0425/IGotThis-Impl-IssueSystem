@@ -774,7 +774,7 @@ suite('view routes', () => {
     expect(row.duration).toEqual({ hasDuration: true, days: 5, unit: 'workingDay' });
   });
 
-  // ---- 顯示層級（switchDisplayLevel） ----
+  // ---- 顯示層級：三個層級一次算好的甘特座標（devOrderGantt.ts） ----
 
   /** 建一個關聯型別；預設獨佔、禁環，不有序（Children 呼叫端自行覆寫 ordered: true）。 */
   async function createRelationType(
@@ -818,15 +818,42 @@ suite('view routes', () => {
     return id;
   }
 
-  function levelIssuesOf(
-    res: { sortedIssues: { id: string; levelIssues: { id: string }[] }[]; unsortedIssues: { id: string; levelIssues: { id: string }[] }[] },
-    topicIssueId: string,
-  ): string[] {
-    const row = [...res.sortedIssues, ...res.unsortedIssues].find((r) => r.id === topicIssueId);
-    return (row?.levelIssues ?? []).map((r) => r.id);
+  interface LevelGroupBody {
+    readonly level: number;
+    readonly bars: readonly { readonly start: number; readonly span: number }[] | null;
+  }
+  interface TopicRowBody {
+    readonly id: string;
+    readonly levels: readonly LevelGroupBody[];
   }
 
-  it('levelIssues：Container 起點加兩層 Children，依 displayLevel 篩出對應層', async () => {
+  function levelsOf(
+    res: { sortedIssues: readonly TopicRowBody[]; unsortedIssues: readonly TopicRowBody[] },
+    topicIssueId: string,
+  ): readonly LevelGroupBody[] {
+    const row = [...res.sortedIssues, ...res.unsortedIssues].find((r) => r.id === topicIssueId);
+    return row?.levels ?? [];
+  }
+
+  function barsAtLevel(
+    levels: readonly LevelGroupBody[],
+    level: number,
+  ): readonly { readonly start: number; readonly span: number }[] | null {
+    return levels.find((g) => g.level === level)?.bars ?? null;
+  }
+
+  /** 今天的 IsoDate 字串；供測試斷言與被測程式碼（route 層現算）用同一種方式取得基準日。 */
+  function todayIso(): string {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  function isoDateOffset(baseIso: string, days: number): string {
+    const d = new Date(`${baseIso}T00:00:00.000Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  }
+
+  it('levels：Container 起點加兩層 Children，一次算好三層各自的甘特座標', async () => {
     const containerType = await createRelationType('Container');
     const childrenType = await createRelationType('Children', { ordered: true });
     const workSetId = await seedWorkIssueSet();
@@ -838,29 +865,103 @@ suite('view routes', () => {
     await createEdge(root, mid, childrenType);
     await createEdge(mid, leaf, childrenType);
 
-    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId], displayLevel: 2 });
+    const today = todayIso();
+    // 三層各設不同長度的起訖區間：bars 本身不帶身份，用 span 數值間接驗證分層正確。
+    await setFieldValue(root, 'StartTime', today);
+    await setFieldValue(root, 'EndTime', isoDateOffset(today, 9)); // span 10
+    await setFieldValue(mid, 'StartTime', today);
+    await setFieldValue(mid, 'EndTime', isoDateOffset(today, 4)); // span 5
+    await setFieldValue(leaf, 'StartTime', today);
+    await setFieldValue(leaf, 'EndTime', today); // span 1
+
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId] });
 
     const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
-    expect(levelIssuesOf(res.json(), topic)).toEqual([mid]);
+    const levels = levelsOf(res.json(), topic);
+    expect(barsAtLevel(levels, 1)).toEqual([{ start: 0, span: 10 }]);
+    expect(barsAtLevel(levels, 2)).toEqual([{ start: 0, span: 5 }]);
+    expect(barsAtLevel(levels, 3)).toEqual([{ start: 0, span: 1 }]);
   });
 
-  it('主題單無 Container 綁定：levelIssues 為空', async () => {
+  it('主題單無 Container 綁定：三層皆為 null', async () => {
     await createRelationType('Container');
     await createRelationType('Children', { ordered: true });
     const topic = await seedIssue(pool, session.companyId, containers);
-    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId], displayLevel: 1 });
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId] });
 
     const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
-    expect(levelIssuesOf(res.json(), topic)).toEqual([]);
+    const levels = levelsOf(res.json(), topic);
+    expect(barsAtLevel(levels, 1)).toBeNull();
+    expect(barsAtLevel(levels, 2)).toBeNull();
+    expect(barsAtLevel(levels, 3)).toBeNull();
   });
 
-  it('Container／Children 型別此 Company 尚未建立：整包仍 200，levelIssues 為空', async () => {
+  it('Container／Children 型別此 Company 尚未建立：整包仍 200，三層皆為 null', async () => {
     const topic = await seedIssue(pool, session.companyId, containers);
-    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId], displayLevel: 1 });
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId] });
 
     const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
     expect(res.statusCode).toBe(200);
-    expect(levelIssuesOf(res.json(), topic)).toEqual([]);
+    const levels = levelsOf(res.json(), topic);
+    expect(barsAtLevel(levels, 1)).toBeNull();
+    expect(barsAtLevel(levels, 2)).toBeNull();
+    expect(barsAtLevel(levels, 3)).toBeNull();
+  });
+
+  it('層內有候選但缺 StartTime／EndTime：該層 bars 為空陣列，不是 null', async () => {
+    const containerType = await createRelationType('Container');
+    const topic = await seedIssue(pool, session.companyId, containers);
+    const workSetId = await seedWorkIssueSet();
+    const root = await seedWorkIssue(workSetId, 'WORK-1');
+    await createEdge(topic, root, containerType);
+
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId] });
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    expect(barsAtLevel(levelsOf(res.json(), topic), 1)).toEqual([]);
+  });
+
+  it('工單起訖日完全落在時間軸視窗外：該筆不出現在 bars 陣列中', async () => {
+    const containerType = await createRelationType('Container');
+    const topic = await seedIssue(pool, session.companyId, containers);
+    const workSetId = await seedWorkIssueSet();
+    const root = await seedWorkIssue(workSetId, 'WORK-1');
+    await createEdge(topic, root, containerType);
+    await setFieldValue(root, 'StartTime', '2000-01-01');
+    await setFieldValue(root, 'EndTime', '2000-01-05');
+
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId] });
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    expect(barsAtLevel(levelsOf(res.json(), topic), 1)).toEqual([]);
+  });
+
+  it('同一層有多筆候選工單，各自依日期獨立換算格子座標', async () => {
+    const containerType = await createRelationType('Container');
+    const childrenType = await createRelationType('Children', { ordered: true });
+    const workSetId = await seedWorkIssueSet();
+    const topic = await seedIssue(pool, session.companyId, containers);
+    const root = await seedWorkIssue(workSetId, 'WORK-ROOT');
+    const childA = await seedWorkIssue(workSetId, 'WORK-A');
+    const childB = await seedWorkIssue(workSetId, 'WORK-B');
+    await createEdge(topic, root, containerType);
+    await createEdge(root, childA, childrenType);
+    await createEdge(root, childB, childrenType);
+
+    const today = todayIso();
+    await setFieldValue(childA, 'StartTime', today);
+    await setFieldValue(childA, 'EndTime', isoDateOffset(today, 1)); // start 0, span 2
+    await setFieldValue(childB, 'StartTime', isoDateOffset(today, 3));
+    await setFieldValue(childB, 'EndTime', isoDateOffset(today, 5)); // start 3, span 3
+
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId] });
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    const bars = barsAtLevel(levelsOf(res.json(), topic), 2);
+    expect(bars).toHaveLength(2);
+    expect(bars).toEqual(
+      expect.arrayContaining([
+        { start: 0, span: 2 },
+        { start: 3, span: 3 },
+      ]),
+    );
   });
 
   it('兩張主題單各自的層級內容互不污染', async () => {
@@ -873,17 +974,62 @@ suite('view routes', () => {
     await createEdge(topicA, rootA, containerType);
     await createEdge(topicB, rootB, containerType);
 
-    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId], displayLevel: 1 });
+    const today = todayIso();
+    await setFieldValue(rootA, 'StartTime', today);
+    await setFieldValue(rootA, 'EndTime', isoDateOffset(today, 2)); // span 3
+    await setFieldValue(rootB, 'StartTime', today);
+    await setFieldValue(rootB, 'EndTime', isoDateOffset(today, 6)); // span 7
+
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId] });
 
     const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
     const body = res.json();
-    expect(levelIssuesOf(body, topicA)).toEqual([rootA]);
-    expect(levelIssuesOf(body, topicB)).toEqual([rootB]);
+    expect(barsAtLevel(levelsOf(body, topicA), 1)).toEqual([{ start: 0, span: 3 }]);
+    expect(barsAtLevel(levelsOf(body, topicB), 1)).toEqual([{ start: 0, span: 7 }]);
   });
 
-  it('主題單清單恆定：切換 displayLevel 前後 sortedIssues／unsortedIssues 的內容不變', async () => {
+  it('回應含 days 欄位：長度 56，第一天 isToday 為真、key 為今天', async () => {
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId] });
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    const days: { key: string; isToday: boolean }[] = res.json().days;
+    expect(days).toHaveLength(56);
+    expect(days[0]?.isToday).toBe(true);
+    expect(days[0]?.key).toBe(todayIso());
+  });
+
+  it('days 的 isHoliday 反映檢視生效日曆的 weeklyOff', async () => {
+    await seedCalendar('台灣', ['SAT', 'SUN']);
+    const view = await createView('V', {
+      sourceMgmtIds: [containers.mgmtId],
+      calendarName: '台灣',
+    });
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    const days: { key: string; isHoliday: boolean }[] = res.json().days;
+    for (const day of days) {
+      const weekday = new Date(`${day.key}T00:00:00.000Z`).getUTCDay();
+      expect(day.isHoliday).toBe(weekday === 0 || weekday === 6);
+    }
+  });
+
+  it('days 的 isHoliday 反映日曆例外（補班日／額外假日）', async () => {
+    const today = todayIso();
+    await seedCalendar('台灣', []);
+    await pool.query(
+      'INSERT INTO calendar_exceptions (company_id, calendar_name, date, is_working) VALUES ($1,$2,$3,$4)',
+      [session.companyId, '台灣', today, false],
+    );
+    const view = await createView('V', {
+      sourceMgmtIds: [containers.mgmtId],
+      calendarName: '台灣',
+    });
+    const res = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });
+    const days: { isHoliday: boolean }[] = res.json().days;
+    expect(days[0]?.isHoliday).toBe(true);
+  });
+
+  it('主題單清單恆定：PATCH displayLevel 前後 sortedIssues／unsortedIssues 的內容不變', async () => {
     const [a, b, c] = await seedThree();
-    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId], displayLevel: 1 });
+    const view = await createView('V', { sourceMgmtIds: [containers.mgmtId] });
     await place(view.id, a, 0);
 
     const before = await call({ method: 'GET', url: `/api/views/${view.id}/issues` });

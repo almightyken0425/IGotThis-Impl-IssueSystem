@@ -14,7 +14,7 @@ import {
   relationRepo,
   viewRepo,
 } from '../../db/repositories/index.js';
-import type { View } from '../../db/repositories/index.js';
+import type { RolePermissionBundle, View } from '../../db/repositories/index.js';
 import {
   admitNewContainerIssue,
   applyViewFilter,
@@ -49,6 +49,8 @@ import type {
 import { buildGanttTimeline, toGanttBarSpan } from '../devOrderGantt.js';
 import type { GanttBarSpan } from '../devOrderGantt.js';
 import { sendError } from '../errors.js';
+import { buildContainerIndex, filterMgmtsByPermission } from '../../permission/index.js';
+import type { ContainerIndex } from '../../permission/index.js';
 import { foldWorkspaceIssueFields } from '../workspaceIssueRow.js';
 import type { WorkspaceIssueRow } from '../workspaceIssueRow.js';
 
@@ -59,12 +61,14 @@ import type { WorkspaceIssueRow } from '../workspaceIssueRow.js';
 // - 看板欄序用 buildKanbanColumns，輸入由本 Company 的工單型別與流程狀態組成
 // - 彙總值用 computeRollupValue，快照自目標工單沿關聯下探的子樹組成（只用既有 repository 查詢）
 //   RollupError（欄位未定義 / 不可彙總 / 關聯成環）一律轉 422
-// - 檢視內容（/:id/issues）串 applyViewFilter → admitNewContainerIssue → resolveViewCalendar
-//   → computeIssueDuration 四個 domain 函式；三個顯示層級（主題/需求/工項）一次算好
-//   回傳，用 computeIssueLevel 對候選集合分組（不透過 switchDisplayLevel 的單層 filter，
-//   候選集合只查一次、不必為了三層重複查關聯資料），甘特圖時間軸與座標換算見
-//   devOrderGantt.ts。回傳結果未經 filterViewByPermission 過濾，權限過濾屬
-//   permission_system 模組，不在這輪範圍。computeIssueLevel 成環（RelationError
+// - 檢視內容（/:id/issues、/:id/workspace-issues）先用 filterMgmtsByPermission（permission
+//   層，見 loadOperatorPermissionContext）把 sourceMgmtIds 分成可讀／不可讀，只有可讀集合
+//   進 applyViewFilter → admitNewContainerIssue → resolveViewCalendar → computeIssueDuration
+//   這條既有管線；不可讀集合只計筆數（permissionExcludedCount），不查欄位值、不進回應內容，
+//   對應 spec PermissionLogic 的 filterViewByPermission。/:id/issues 額外把三個顯示層級
+//   （主題/需求/工項）一次算好回傳，用 computeIssueLevel 對候選集合分組（不透過
+//   switchDisplayLevel 的單層 filter，候選集合只查一次、不必為了三層重複查關聯資料），
+//   甘特圖時間軸與座標換算見 devOrderGantt.ts。computeIssueLevel 成環（RelationError
 //   RELATION_CYCLE）一律轉 422，比照 RollupError
 
 export interface ViewRoutesOptions {
@@ -363,6 +367,23 @@ async function collectContainerIssues(
     issues.push(...found);
   }
   return issues;
+}
+
+/**
+ * 查一帳號的權限判定素材：全部 Role bundle ＋ 容器歸屬索引，供 filterMgmtsByPermission
+ * 判定讀取權。比照 permissions.ts 的 operatorBundles／loadContainerIndex，但那兩個是該檔
+ * 未匯出的區域函式，跨檔案不能直接重用；這裡複製同一套邏輯——量體小（兩三行 repo 呼叫
+ * 組裝），不為此開共用模組，等出現第三個呼叫端才是抽共用的時機。
+ */
+async function loadOperatorPermissionContext(
+  pool: Pool,
+  companyId: string,
+  accountId: string,
+): Promise<{ bundles: RolePermissionBundle[]; index: ContainerIndex }> {
+  const bundles = await permissionRepo.getEffectivePermissionInputs(pool, companyId, accountId);
+  const tree = await containerRepo.getContainerTree(companyId, pool);
+  const index = buildContainerIndex(tree ?? { id: companyId, name: '', teams: [] });
+  return { bundles, index };
 }
 
 /** 逐張工單查欄位單值，組成 applyViewFilter 的候選投影。 */
@@ -703,8 +724,9 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
     readonly levels: readonly DevOrderLevelGroup[];
   }
 
-  // 檢視資料來源展開、套用篩選、已排序/未排序分區、日曆與工期計算、顯示層級內容。
-  // 回傳結果未經 filterViewByPermission 過濾（權限過濾屬 permission_system，不在這輪範圍）。查無檢視回 404。
+  // 檢視資料來源展開、套用篩選、已排序/未排序分區、日曆與工期計算、顯示層級內容。查無檢視回 404。
+  // 資料來源先依讀取者的 Mgmt 讀取權分流（filterMgmtsByPermission）：可讀集合才進欄位值
+  // 查詢與後續管線，不可讀集合只計筆數（permissionExcludedCount）、不查欄位值、不進回應。
   // Container／Children 關聯型別若此 Company 尚未建立（無種子植入邏輯，需手動建立），
   // 一律視為無層級內容，不把 undefined 傳進關聯查詢——那樣語意會從「查特定型別」
   // 錯變成「查全部型別」，混入不相干工單。
@@ -718,7 +740,17 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
         return sendError(reply, 404, 'VIEW_NOT_FOUND', '檢視不存在');
       }
 
-      const containerIssues = await collectContainerIssues(pool, companyId, view.sourceMgmtIds);
+      const { bundles, index } = await loadOperatorPermissionContext(pool, companyId, accountId);
+      const { readableMgmtIds, deniedMgmtIds } = filterMgmtsByPermission(
+        view.sourceMgmtIds,
+        bundles,
+        index,
+      );
+
+      const containerIssues = await collectContainerIssues(pool, companyId, readableMgmtIds);
+      const permissionExcludedCount = (
+        await collectContainerIssues(pool, companyId, deniedMgmtIds)
+      ).length;
       const candidates = await buildFilterCandidates(pool, companyId, containerIssues);
       const { included, excludedIds } = applyViewFilter(candidates, parseFilterConfig(view.filterConfig));
 
@@ -765,6 +797,15 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
       // 直接分組，不透過 switchDisplayLevel 的單層 filter（那樣三層要重複查三次）。
       // 候選工單（沿 Container/Children 關聯查到的）不在 candidateById 範圍內
       // （它們屬於不同的工單集，不是主題單位置本身），需要各自查欄位值。
+      //
+      // 已知限制（記錄不修）：候選工單沿關聯往下收集時不檢查所屬 Mgmt 是否可讀——
+      // 只要主題單本身落在可讀 Mgmt，往下關聯到的子工項就會直接查欄位值、畫進甘特
+      // 長條，不管子工項實際屬於哪個 Mgmt。對應 spec 的 readCrossBoundaryRelation
+      // （關聯指向無讀取權的工單時僅提供工單編號）目前完全沒有實作。這個洞目前休眠：
+      // MVP 每個 Company 只有一顆預設 Mgmt（見 ListScreen.tsx 註解），不存在「主題單
+      // 可讀、子工項不可讀」的情境；一旦開放多 Mgmt，甘特長條的有無／長度會間接洩漏
+      // 無權限工項是否有排程。修復需要先實作 readCrossBoundaryRelation，且甘特長條在
+      // 「僅提供編號」規則下該顯示成什麼樣本身是未解的設計問題，這輪不做。
       const levelBarsOf = async (topicIssueId: string): Promise<DevOrderLevelGroup[]> => {
         if (containerType === undefined || childrenType === undefined) {
           return DEV_ORDER_LEVEL_NUMBERS.map((level) => ({ level, bars: null }));
@@ -830,6 +871,7 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
           unsortedIssues,
           calendarName,
           excludedCount: excludedIds.length,
+          permissionExcludedCount,
           days,
         });
       } catch (error: unknown) {
@@ -844,19 +886,29 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
   // 檢視資料來源範圍內的完整欄位工單列，供 ListScreen／KanbanScreen 消費。
   // 跟 /:id/issues（主題單視角，窄欄位、供 DevOrderScreen）是不同形狀，各自服務。
   // 資料來源展開、套用篩選同一條鏈路，只是摺列换成完整欄位（title/status/
-  // assignee/point/due/resolution）。回傳結果未經 filterViewByPermission 過濾
-  // （原因同 /:id/issues：權限過濾屬 permission_system，不在這輪範圍）。
+  // assignee/point/due/resolution）。資料來源分流同 /:id/issues：先依讀取者的 Mgmt
+  // 讀取權過濾，見 loadOperatorPermissionContext／filterMgmtsByPermission。
   app.get<{ Params: { id: string } }>(
     '/:id/workspace-issues',
     { schema: { params: idParamsSchema } },
     async (request, reply) => {
-      const { companyId } = currentIdentity(request);
+      const { companyId, accountId } = currentIdentity(request);
       const view = await viewRepo.getView(pool, companyId, request.params.id);
       if (view === undefined) {
         return sendError(reply, 404, 'VIEW_NOT_FOUND', '檢視不存在');
       }
 
-      const containerIssues = await collectContainerIssues(pool, companyId, view.sourceMgmtIds);
+      const { bundles, index } = await loadOperatorPermissionContext(pool, companyId, accountId);
+      const { readableMgmtIds, deniedMgmtIds } = filterMgmtsByPermission(
+        view.sourceMgmtIds,
+        bundles,
+        index,
+      );
+
+      const containerIssues = await collectContainerIssues(pool, companyId, readableMgmtIds);
+      const permissionExcludedCount = (
+        await collectContainerIssues(pool, companyId, deniedMgmtIds)
+      ).length;
       const candidates = await buildFilterCandidates(pool, companyId, containerIssues);
       const { included, excludedIds } = applyViewFilter(candidates, parseFilterConfig(view.filterConfig));
 
@@ -867,7 +919,9 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
         ...foldWorkspaceIssueFields(candidate.fields),
       }));
 
-      return reply.status(200).send({ issues, excludedCount: excludedIds.length });
+      return reply
+        .status(200)
+        .send({ issues, excludedCount: excludedIds.length, permissionExcludedCount });
     },
   );
 

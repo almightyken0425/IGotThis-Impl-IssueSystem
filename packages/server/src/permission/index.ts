@@ -16,3 +16,5 @@ export type {
   RoleAssignmentDenial,
   RoleAssignmentTarget,
 } from './effectivePermission.js';
+export { filterMgmtsByPermission } from './filterMgmtsByPermission.js';
+export type { MgmtPermissionPartition } from './filterMgmtsByPermission.js';

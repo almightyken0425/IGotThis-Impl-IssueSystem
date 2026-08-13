@@ -21,13 +21,13 @@ import {
   assignSortPosition,
   buildKanbanColumns,
   computeIssueDuration,
+  computeIssueLevel,
   computeRollupValue,
   expandDataSource,
   RelationError,
   resolveViewCalendar,
   RollupError,
   SortPositionError,
-  switchDisplayLevel,
   WORK_LOG_FIELD_NAME,
 } from '../../domain/index.js';
 import type {
@@ -45,8 +45,9 @@ import type {
   RollupRelation,
   RollupRelationType,
   RollupSnapshot,
-  WorkCalendar,
 } from '../../domain/index.js';
+import { buildGanttTimeline, toGanttBarSpan } from '../devOrderGantt.js';
+import type { GanttBarSpan } from '../devOrderGantt.js';
 import { sendError } from '../errors.js';
 import { foldWorkspaceIssueFields } from '../workspaceIssueRow.js';
 import type { WorkspaceIssueRow } from '../workspaceIssueRow.js';
@@ -59,9 +60,12 @@ import type { WorkspaceIssueRow } from '../workspaceIssueRow.js';
 // - 彙總值用 computeRollupValue，快照自目標工單沿關聯下探的子樹組成（只用既有 repository 查詢）
 //   RollupError（欄位未定義 / 不可彙總 / 關聯成環）一律轉 422
 // - 檢視內容（/:id/issues）串 applyViewFilter → admitNewContainerIssue → resolveViewCalendar
-//   → computeIssueDuration → switchDisplayLevel 五個 domain 函式；回傳結果未經
-//   filterViewByPermission 過濾，權限過濾屬 permission_system 模組，不在這輪範圍。
-//   switchDisplayLevel 成環（RelationError RELATION_CYCLE）一律轉 422，比照 RollupError
+//   → computeIssueDuration 四個 domain 函式；三個顯示層級（主題/需求/工項）一次算好
+//   回傳，用 computeIssueLevel 對候選集合分組（不透過 switchDisplayLevel 的單層 filter，
+//   候選集合只查一次、不必為了三層重複查關聯資料），甘特圖時間軸與座標換算見
+//   devOrderGantt.ts。回傳結果未經 filterViewByPermission 過濾，權限過濾屬
+//   permission_system 模組，不在這輪範圍。computeIssueLevel 成環（RelationError
+//   RELATION_CYCLE）一律轉 422，比照 RollupError
 
 export interface ViewRoutesOptions {
   readonly pool: Pool;
@@ -327,6 +331,12 @@ const FIELD_TITLE = 'title';
 const FIELD_START_TIME = 'StartTime';
 const FIELD_END_TIME = 'EndTime';
 
+/** 甘特圖時間軸長度：8 週（design 定案的視覺長度），從今天起算。 */
+const DEV_ORDER_TIMELINE_DAY_COUNT = 56;
+
+/** 顯示層級數字：epic↔1, story↔2, task↔3，對應 computeIssueLevel「根為第一層」。 */
+const DEV_ORDER_LEVEL_NUMBERS = [1, 2, 3] as const;
+
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
@@ -429,36 +439,6 @@ async function collectDisplayLevelCandidates(
   }
 
   return { candidateIssueIds: [...candidateIds], relations };
-}
-
-/** 依 issue id 逐筆查基本資料，組成顯示層級內容呈現用的列。查無工單的 id 略過。 */
-async function buildLevelIssueRows(
-  pool: Pool,
-  companyId: string,
-  issueIds: readonly string[],
-  calendar: WorkCalendar | null,
-): Promise<{ id: string; key: string; title: string; duration: IssueDuration }[]> {
-  const rows: { id: string; key: string; title: string; duration: IssueDuration }[] = [];
-  for (const issueId of issueIds) {
-    const issue = await issueRepo.getIssue(companyId, issueId, pool);
-    if (issue === undefined) continue;
-    const values = await issueRepo.listFieldValues(companyId, issueId, pool);
-    const fields: Record<string, unknown> = {};
-    for (const value of values) {
-      fields[value.fieldName] = value.value;
-    }
-    rows.push({
-      id: issueId,
-      key: issue.issueKey,
-      title: asString(fields[FIELD_TITLE]),
-      duration: computeIssueDuration(
-        asIsoDateOrNull(fields[FIELD_START_TIME]),
-        asIsoDateOrNull(fields[FIELD_END_TIME]),
-        calendar,
-      ),
-    });
-  }
-  return rows;
 }
 
 /**
@@ -712,9 +692,15 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
     readonly duration: IssueDuration;
   }
 
-  /** 主題單清單的一列，額外帶目前顯示層級（Views.displayLevel）展開出的內容。 */
+  /** 單一顯示層級的甘特長條集合；bars 為 null 代表該主題單在此層級無內容。 */
+  interface DevOrderLevelGroup {
+    readonly level: number;
+    readonly bars: readonly GanttBarSpan[] | null;
+  }
+
+  /** 主題單清單的一列，額外帶三個顯示層級（主題/需求/工項）一次算好的甘特座標。 */
   interface TopicIssueRow extends ViewIssueRow {
-    readonly levelIssues: readonly ViewIssueRow[];
+    readonly levels: readonly DevOrderLevelGroup[];
   }
 
   // 檢視資料來源展開、套用篩選、已排序/未排序分區、日曆與工期計算、顯示層級內容。
@@ -751,6 +737,10 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
           ? null
           : ((await calendarRepo.getCalendar(pool, companyId, calendarName)) ?? null);
 
+      // route 層算好「今天」再傳給純函式；domain／api 純函式不碰時鐘。
+      const today: IsoDate = new Date().toISOString().slice(0, 10);
+      const days = buildGanttTimeline(today, DEV_ORDER_TIMELINE_DAY_COUNT, calendar);
+
       const candidateById = new Map(included.map((candidate) => [candidate.issueId, candidate]));
       const issueById = new Map(containerIssues.map((issue) => [issue.id, issue]));
 
@@ -771,8 +761,14 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
       const containerType = await relationRepo.findRelationTypeByName(companyId, 'Container', pool);
       const childrenType = await relationRepo.findRelationTypeByName(companyId, 'Children', pool);
 
-      const levelIssuesOf = async (topicIssueId: string): Promise<ViewIssueRow[]> => {
-        if (containerType === undefined || childrenType === undefined) return [];
+      // 三層一次算好：候選集合只查一次，對每個候選呼叫 computeIssueLevel 取得層級數字
+      // 直接分組，不透過 switchDisplayLevel 的單層 filter（那樣三層要重複查三次）。
+      // 候選工單（沿 Container/Children 關聯查到的）不在 candidateById 範圍內
+      // （它們屬於不同的工單集，不是主題單位置本身），需要各自查欄位值。
+      const levelBarsOf = async (topicIssueId: string): Promise<DevOrderLevelGroup[]> => {
+        if (containerType === undefined || childrenType === undefined) {
+          return DEV_ORDER_LEVEL_NUMBERS.map((level) => ({ level, bars: null }));
+        }
         const { candidateIssueIds, relations } = await collectDisplayLevelCandidates(
           pool,
           companyId,
@@ -780,19 +776,48 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
           containerType.id,
           childrenType.id,
         );
-        const levelIds = switchDisplayLevel({
-          candidateIssueIds,
-          relations,
-          childrenRelationTypeId: childrenType.id,
-          targetLevel: view.displayLevel,
-        });
-        return buildLevelIssueRows(pool, companyId, levelIds, calendar);
+
+        const issueIdsByLevel = new Map<number, string[]>();
+        for (const issueId of candidateIssueIds) {
+          const level = computeIssueLevel({
+            issueId,
+            relations,
+            childrenRelationTypeId: childrenType.id,
+          });
+          const group = issueIdsByLevel.get(level);
+          if (group === undefined) issueIdsByLevel.set(level, [issueId]);
+          else group.push(issueId);
+        }
+
+        const groups: DevOrderLevelGroup[] = [];
+        for (const level of DEV_ORDER_LEVEL_NUMBERS) {
+          const issueIds = issueIdsByLevel.get(level);
+          if (issueIds === undefined) {
+            groups.push({ level, bars: null });
+            continue;
+          }
+          const bars: GanttBarSpan[] = [];
+          for (const issueId of issueIds) {
+            const values = await issueRepo.listFieldValues(companyId, issueId, pool);
+            const fields: Record<string, unknown> = {};
+            for (const value of values) fields[value.fieldName] = value.value;
+            const span = toGanttBarSpan(
+              asIsoDateOrNull(fields[FIELD_START_TIME]),
+              asIsoDateOrNull(fields[FIELD_END_TIME]),
+              today,
+              DEV_ORDER_TIMELINE_DAY_COUNT,
+            );
+            if (span !== null) bars.push(span);
+          }
+          groups.push({ level, bars });
+        }
+        return groups;
       };
 
       const toTopicRows = async (issueIds: readonly string[]): Promise<TopicIssueRow[]> => {
         const rows: TopicIssueRow[] = [];
         for (const issueId of issueIds) {
-          rows.push({ ...toRow(issueId), levelIssues: await levelIssuesOf(issueId) });
+          rows.push({ ...toRow(issueId), levels: await levelBarsOf(issueId) });
         }
         return rows;
       };
@@ -805,6 +830,7 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
           unsortedIssues,
           calendarName,
           excludedCount: excludedIds.length,
+          days,
         });
       } catch (error: unknown) {
         if (error instanceof RelationError) {

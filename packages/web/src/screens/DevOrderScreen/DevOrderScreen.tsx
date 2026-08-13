@@ -6,10 +6,17 @@
 // 來源：design git 的 `30_screens/no3_dev_order_screen/no3_dev_order_screen.jsx`。
 // 對側 spec：no3_product_specs/no1_issue_system/no2_screens/no3_dev_order_screen.md
 //
-// 資料來源：改接真 API。主題單清單由 /api/workspace/issues 取回。工單的排程區間
-// （StartTime / EndTime / 層級拆解）尚未落資料模型，故一律以「未排程」呈現——甘特
-// 側只留格線與假日底，不畫長條。這是 design fixtures 已涵蓋的合法三態之一，非造假。
-// 排序為當次瀏覽狀態，DevOrder 欄位的持久化待後續接上。
+// 資料來源：依當前檢視（CurrentViewContext）查 /api/views/:id/issues，一次拿三個
+// 顯示層級（主題/需求/工項）算好的甘特座標與時間軸；無當前檢視時顯示空狀態，不發
+// 請求。MVP 工單種子尚未提供 StartTime／EndTime（workspace.ts 只有單一 due 欄位），
+// 故目前所有主題單在三層都會呈現「已排入順序、未排程」，這是後端計算結果如實反映，
+// 不是前端刻意隱藏。
+//
+// 排序拖曳：只接受「已排序區內重排」與「未排序拖進已排序」兩種落點，PUT
+// /api/views/:id/sort/:issueId 寫入後端持久化排序值，成功後 reload 整批資料
+// （不用 PUT 回傳的 entries 直接拼畫面，見 internal.tsx 對 dragLocked 的說明）。
+// 「已排序拖回未排序」與「未排序內重排」不支援——後端 assignSortPosition 只能
+// 指派位置、不能移出已排序區，也沒有對應的刪除端點。
 //
 // 消費元件：gantt（Toolbar / LevelSwitcher / GanttHeader / …）、data（EmptyState），
 //           本檔私有的帶狀組裝件在 internal.tsx。
@@ -17,8 +24,9 @@
 import { useCallback, useMemo, useState } from 'react';
 import type { DragEvent } from 'react';
 
-import { workspaceApi } from '../../api';
-import type { WorkspaceIssue } from '../../api';
+import { ApiError, viewsApi } from '../../api';
+import type { DevOrderIssuesResult, TopicIssueRow } from '../../api';
+import { useCurrentView } from '../../app/CurrentViewContext';
 import { Chip, IconButton } from '../../components/controls';
 import { EmptyState } from '../../components/data';
 import { GanttHeader, LevelSwitcher, Toolbar } from '../../components/gantt';
@@ -32,13 +40,12 @@ import {
 } from '../../theme';
 import { typeStyle } from '../typeStyle';
 import {
-  DEV_ORDER_CALENDAR_NAME,
-  DEV_ORDER_DAYS,
   DEV_ORDER_DEFAULT_LEVEL,
+  DEV_ORDER_LEVEL_BY_NUMBER,
   DEV_ORDER_LEVELS,
   rangeLabel,
 } from './fixtures';
-import type { DevOrderIssue, DevOrderLevelId } from './fixtures';
+import type { DevOrderIssue, DevOrderLevelBars, DevOrderLevelId } from './fixtures';
 import {
   DevOrderEmptyBoard,
   DevOrderHeaderLeading,
@@ -51,71 +58,62 @@ import { DEV_ORDER_SCREEN_TOKENS } from './tokens';
 
 const T = DEV_ORDER_SCREEN_TOKENS;
 
-type SectionId = 'sorted' | 'unsorted';
-
-interface DropTarget {
-  readonly section: SectionId;
-  readonly index: number;
-}
-
-/** 把 API 工單摺成主題單形狀：三層皆未排程（無長條），只呈現身份與順序。 */
-function toDevOrderIssue(issue: WorkspaceIssue): DevOrderIssue {
-  return {
-    id: issue.id,
-    key: issue.key,
-    title: issue.title,
-    sources: [],
-    levels: { epic: [], story: null, task: null },
-  };
+/** 把後端 levels:[{level,bars}] 陣列換鍵成前端 {epic,story,task}；純換名，三態原樣搬過去。 */
+function toDevOrderIssue(row: TopicIssueRow): DevOrderIssue {
+  const levels: Record<DevOrderLevelId, DevOrderLevelBars> = { epic: null, story: null, task: null };
+  for (const group of row.levels) {
+    const levelId = DEV_ORDER_LEVEL_BY_NUMBER[group.level];
+    if (levelId !== undefined) levels[levelId] = group.bars;
+  }
+  return { id: row.id, key: row.key, title: row.title, levels };
 }
 
 export function DevOrderScreen() {
   const { theme } = useTheme();
   const colors = resolveGanttColors(theme);
-  const days = DEV_ORDER_DAYS;
   const density = T.DENSITY;
   const listWidth = T.LIST_COLUMN_WIDTH;
 
-  const { data, loading, error, reload } = useAsync(
-    useCallback(() => workspaceApi.listIssues(), []),
-  );
+  const { currentView } = useCurrentView();
+
+  const fetcher = useCallback(async (): Promise<DevOrderIssuesResult | null> => {
+    if (currentView === null) return null;
+    return viewsApi.getDevOrderIssues(currentView.id);
+  }, [currentView]);
+  const { data, loading, error, reload } = useAsync(fetcher);
+
+  const days = data?.days ?? [];
+  const calendarLabel = data?.calendarName ?? '未設定日曆';
 
   const [level, setLevel] = useState<DevOrderLevelId>(DEV_ORDER_DEFAULT_LEVEL);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  // 順序狀態：初始全部落已排序區，順序即列表回傳序。
-  const [sortedIds, setSortedIds] = useState<readonly string[] | null>(null);
-  const [unsortedIds, setUnsortedIds] = useState<readonly string[]>([]);
-
   const [draggingId, setDraggingId] = useState<string | null>(null);
-  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
-
-  const issueById = useMemo(() => {
-    const map = new Map<string, DevOrderIssue>();
-    for (const issue of data ?? []) map.set(issue.id, toDevOrderIssue(issue));
-    return map;
-  }, [data]);
-
-  // 資料抵達後以列表序初始化已排序區；後續順序改動不被重抓覆蓋。
-  const effectiveSorted = sortedIds ?? (data ?? []).map((i) => i.id);
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [dropError, setDropError] = useState<string | undefined>(undefined);
 
   const toRows = useCallback(
-    (ids: readonly string[]): readonly DevOrderRow[] =>
-      ids.flatMap((id) => {
-        const issue = issueById.get(id);
-        if (issue === undefined) return [];
-        return [{ issue, selected: id === selectedId, ghost: id === draggingId }];
-      }),
-    [issueById, selectedId, draggingId],
+    (rows: readonly TopicIssueRow[]): readonly DevOrderRow[] =>
+      rows.map((row) => ({
+        issue: toDevOrderIssue(row),
+        selected: row.id === selectedId,
+        ghost: row.id === draggingId,
+        pending: row.id === pendingId,
+      })),
+    [selectedId, draggingId, pendingId],
   );
 
-  const sortedRows = useMemo(() => toRows(effectiveSorted), [toRows, effectiveSorted]);
-  const unsortedRows = useMemo(() => toRows(unsortedIds), [toRows, unsortedIds]);
+  const sortedRows = useMemo(() => toRows(data?.sortedIssues ?? []), [toRows, data?.sortedIssues]);
+  const unsortedRows = useMemo(
+    () => toRows(data?.unsortedIssues ?? []),
+    [toRows, data?.unsortedIssues],
+  );
   const boardEmpty = sortedRows.length === 0 && unsortedRows.length === 0;
 
   const endDrag = useCallback(() => {
     setDraggingId(null);
-    setDropTarget(null);
+    setDropIndex(null);
   }, []);
 
   const onDragStart = useCallback((id: string, event: DragEvent<HTMLElement>) => {
@@ -125,61 +123,46 @@ export function DevOrderScreen() {
   }, []);
 
   const onDropIndexChange = useCallback(
-    (section: SectionId, index: number, event: DragEvent<HTMLElement>) => {
+    (index: number, event: DragEvent<HTMLElement>) => {
       if (draggingId === null) return;
       event.preventDefault();
       event.dataTransfer.dropEffect = 'move';
-      setDropTarget((prev) =>
-        prev !== null && prev.section === section && prev.index === index
-          ? prev
-          : { section, index },
-      );
+      setDropIndex((prev) => (prev === index ? prev : index));
     },
     [draggingId],
   );
 
+  // targetIndex 是「把目標自己移出後」的插入位置（assignSortPosition 的既定契約，
+  // 已對照 sortPosition.ts 的 others = sorted 濾掉 issueId 後的清單確認）：拖曳中
+  // 若目標本來就在已排序區、且原位置在落點之前，插入點要扣掉自己那一格；從未排序
+  // 拖入的情境目標不在已排序區內，落點不必調整。
   const commitDrop = useCallback(
-    (event: DragEvent<HTMLElement>) => {
+    async (event: DragEvent<HTMLElement>) => {
       event.preventDefault();
       const id = draggingId;
-      const target = dropTarget;
+      const index = dropIndex;
       endDrag();
-      if (id === null || target === null) return;
+      if (id === null || index === null || currentView === null) return;
 
-      const currentSorted = effectiveSorted;
-      const from: SectionId = currentSorted.includes(id) ? 'sorted' : 'unsorted';
-      const fromList = from === 'sorted' ? currentSorted : unsortedIds;
-      const toList = target.section === 'sorted' ? currentSorted : unsortedIds;
-      const removedAt = fromList.indexOf(id);
-      if (removedAt === -1) return;
+      const sortedIds = (data?.sortedIssues ?? []).map((row) => row.id);
+      const removedAt = sortedIds.indexOf(id);
+      const targetIndex = removedAt !== -1 && removedAt < index ? index - 1 : index;
 
-      const nextFrom = fromList.filter((x) => x !== id);
-      const insertAt =
-        from === target.section && removedAt < target.index ? target.index - 1 : target.index;
-
-      if (from === target.section) {
-        const next = [...nextFrom];
-        next.splice(insertAt, 0, id);
-        if (from === 'sorted') setSortedIds(next);
-        else setUnsortedIds(next);
-        return;
-      }
-
-      const nextTo = [...toList];
-      nextTo.splice(insertAt, 0, id);
-      if (from === 'sorted') {
-        setSortedIds(nextFrom);
-        setUnsortedIds(nextTo);
-      } else {
-        setUnsortedIds(nextFrom);
-        setSortedIds(nextTo);
+      setDropError(undefined);
+      setPendingId(id);
+      try {
+        await viewsApi.setSortPosition(currentView.id, id, targetIndex);
+        await reload();
+      } catch (err: unknown) {
+        setDropError(err instanceof ApiError ? err.message : '排序更新失敗');
+      } finally {
+        setPendingId(null);
       }
     },
-    [draggingId, dropTarget, endDrag, effectiveSorted, unsortedIds],
+    [draggingId, dropIndex, endDrag, currentView, data?.sortedIssues, reload],
   );
 
-  const dropIndexFor = (section: SectionId) =>
-    dropTarget !== null && dropTarget.section === section ? dropTarget.index : undefined;
+  const dragLocked = pendingId !== null;
 
   const board = (
     <div
@@ -196,7 +179,7 @@ export function DevOrderScreen() {
             days={days}
             density={density}
             leadingWidth={listWidth}
-            leading={<DevOrderHeaderLeading calendarName={DEV_ORDER_CALENDAR_NAME} />}
+            leading={<DevOrderHeaderLeading calendarName={calendarLabel} />}
           />
 
           <DevOrderSectionBand
@@ -207,8 +190,8 @@ export function DevOrderScreen() {
             count={sortedRows.length}
             active={draggingId !== null}
             hint={draggingId !== null ? '放開即插入此區' : undefined}
-            onDragOver={(event) => onDropIndexChange('sorted', 0, event)}
-            onDrop={commitDrop}
+            onDragOver={(event) => onDropIndexChange(0, event)}
+            onDrop={(event) => void commitDrop(event)}
           />
           <DevOrderRowBand
             days={days}
@@ -216,12 +199,13 @@ export function DevOrderScreen() {
             listWidth={listWidth}
             rows={sortedRows}
             levelId={level}
-            dropIndex={dropIndexFor('sorted')}
+            dropIndex={dropIndex ?? undefined}
+            dragLocked={dragLocked}
             onSelect={setSelectedId}
             onDragStart={onDragStart}
             onDragEnd={endDrag}
-            onDropIndexChange={(index, event) => onDropIndexChange('sorted', index, event)}
-            onDrop={commitDrop}
+            onDropIndexChange={onDropIndexChange}
+            onDrop={(event) => void commitDrop(event)}
           />
 
           <DevOrderSectionBand
@@ -231,8 +215,6 @@ export function DevOrderScreen() {
             title="未排序"
             count={unsortedRows.length}
             hint="拖入上方即排序"
-            onDragOver={(event) => onDropIndexChange('unsorted', 0, event)}
-            onDrop={commitDrop}
           />
           <DevOrderRowBand
             days={days}
@@ -241,17 +223,15 @@ export function DevOrderScreen() {
             rows={unsortedRows}
             levelId={level}
             showBars={false}
-            dropIndex={dropIndexFor('unsorted')}
+            dragLocked={dragLocked}
             onSelect={setSelectedId}
             onDragStart={onDragStart}
             onDragEnd={endDrag}
-            onDropIndexChange={(index, event) => onDropIndexChange('unsorted', index, event)}
-            onDrop={commitDrop}
           />
         </div>
       </div>
 
-      <DevOrderLegend calendarName={DEV_ORDER_CALENDAR_NAME} />
+      <DevOrderLegend calendarName={calendarLabel} />
     </div>
   );
 
@@ -289,7 +269,7 @@ export function DevOrderScreen() {
         }
         right={
           <>
-            <Chip label="日曆" value={DEV_ORDER_CALENDAR_NAME} />
+            <Chip label="日曆" value={calendarLabel} />
             <IconButton icon="dots" title="更多動作" />
           </>
         }
@@ -305,7 +285,18 @@ export function DevOrderScreen() {
           padding: T.BODY_PADDING,
         }}
       >
-        {error !== undefined ? (
+        {dropError !== undefined && (
+          <span role="alert" style={{ ...typeStyle(TYPE_STYLES.caption), color: theme.status.error_fg }}>
+            {dropError}
+          </span>
+        )}
+
+        {currentView === null ? (
+          <EmptyState
+            title="尚無檢視"
+            description="請先在左側「當前檢視」新增一張檢視，才能載入開發順序表。"
+          />
+        ) : error !== undefined ? (
           <EmptyState
             icon="clock"
             title="載入開發順序表失敗"

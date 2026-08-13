@@ -15,6 +15,16 @@
 //
 // 拖放的命中判定在本檔：SortableRow 是受控視覺層，只吃 dropIndicator，
 // 「游標落在哪兩列之間」由列容器的 onDragOver 依 bounding rect 中線算出。
+//
+// 未排序區不接受 drop：HTML5 原生拖放預設拒絕落點，只有 dragover 事件呼叫過
+// preventDefault 的元素才會被瀏覽器允許 drop。DevOrderRowBand／DevOrderSectionBand
+// 的 onDropIndexChange／onDrop 兩個 prop 因此是 optional——呼叫端（DevOrderScreen）
+// 對未排序區直接不傳，本檔對應地讓 onDragOver 這個閉包本身在沒有 handler 時整個
+// 不掛上 DOM（不是掛了但內部跳過），未排序列才會真的變成不合法落點，不是「掛著但
+// 沒反應」。
+//
+// dragLocked 為真時整區列改 draggable={false}：避免上一筆拖曳寫回 API 還沒回來，
+// 使用者又拖第二筆，兩次寫入互相踩到同一份依序遞增的 sortValue。
 
 import type { DragEvent } from 'react';
 
@@ -144,6 +154,8 @@ export interface DevOrderRow {
   readonly issue: DevOrderIssue;
   readonly selected: boolean;
   readonly ghost: boolean;
+  /** 這筆的排序寫入正在等後端確認。借用 SortableRow 的 disabled 視覺呈現。 */
+  readonly pending: boolean;
 }
 
 export interface DevOrderRowBandProps {
@@ -155,12 +167,17 @@ export interface DevOrderRowBandProps {
   readonly showBars?: boolean;
   /** 插入點落在本區第幾列之前；等於 rows.length 表示插在末列之後。 */
   readonly dropIndex?: number | undefined;
+  /** 為真時整區列 draggable=false，鎖住新拖曳直到目前寫入完成。 */
+  readonly dragLocked?: boolean | undefined;
   readonly onSelect: (id: string) => void;
   readonly onDragStart: (id: string, event: DragEvent<HTMLElement>) => void;
   readonly onDragEnd: () => void;
-  /** 游標落在兩列之間時回報插入點。由本元件依 bounding rect 中線算出。 */
-  readonly onDropIndexChange: (index: number, event: DragEvent<HTMLElement>) => void;
-  readonly onDrop: (event: DragEvent<HTMLElement>) => void;
+  /**
+   * 游標落在兩列之間時回報插入點。由本元件依 bounding rect 中線算出。
+   * 省略即本區不接受 drop（未排序區的既定用法）。
+   */
+  readonly onDropIndexChange?: ((index: number, event: DragEvent<HTMLElement>) => void) | undefined;
+  readonly onDrop?: ((event: DragEvent<HTMLElement>) => void) | undefined;
 }
 
 export function DevOrderRowBand({
@@ -171,6 +188,7 @@ export function DevOrderRowBand({
   levelId,
   showBars = true,
   dropIndex,
+  dragLocked = false,
   onSelect,
   onDragStart,
   onDragEnd,
@@ -197,7 +215,6 @@ export function DevOrderRowBand({
         level={depth}
         startIndex={bar.start}
         span={bar.span}
-        overrunSpan={bar.overrun ?? 0}
         durationLabel={durationLabel(days, bar)}
         selected={row.selected}
         onActivate={() => onSelect(row.issue.id)}
@@ -226,14 +243,18 @@ export function DevOrderRowBand({
         {rows.map((row, index) => (
           <div
             key={row.issue.id}
-            draggable
+            draggable={!dragLocked}
             onDragStart={(event) => onDragStart(row.issue.id, event)}
             onDragEnd={onDragEnd}
-            onDragOver={(event) => {
-              const rect = event.currentTarget.getBoundingClientRect();
-              const after = event.clientY > rect.top + rect.height / 2;
-              onDropIndexChange(after ? index + 1 : index, event);
-            }}
+            onDragOver={
+              onDropIndexChange === undefined
+                ? undefined
+                : (event) => {
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    const after = event.clientY > rect.top + rect.height / 2;
+                    onDropIndexChange(after ? index + 1 : index, event);
+                  }
+            }
             onDrop={onDrop}
           >
             <SortableRow
@@ -242,6 +263,7 @@ export function DevOrderRowBand({
               meta={row.issue.key}
               selected={row.selected}
               ghost={row.ghost}
+              disabled={row.pending}
               dropIndicator={indicatorOf(index)}
               onActivate={() => onSelect(row.issue.id)}
             />

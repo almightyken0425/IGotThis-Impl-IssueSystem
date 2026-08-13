@@ -112,3 +112,59 @@ export interface CreateViewInput {
   readonly scopeType: 'team' | 'product' | 'mgmt';
   readonly scopeId: string;
 }
+
+/** 甘特橫軸的一個日曆天。對齊 devOrderGantt.ts 的 GanttDay，後端一律回滿八個欄位。 */
+export interface GanttDay {
+  readonly key: string;
+  readonly dayNumber: number;
+  readonly weekdayLabel: string;
+  readonly monthLabel: string;
+  readonly isHoliday: boolean;
+  readonly isMonthStart: boolean;
+  readonly isWeekStart: boolean;
+  readonly isToday: boolean;
+}
+
+/** 工單起訖日換算成時間軸格子座標。對齊 devOrderGantt.ts 的 GanttBarSpan；無 overrun 欄位。 */
+export interface GanttBarSpan {
+  readonly start: number;
+  readonly span: number;
+}
+
+/** 單一顯示層級的甘特長條集合。bars 為 null 代表該主題單在此層級無內容。 */
+export interface DevOrderLevelGroup {
+  readonly level: number;
+  readonly bars: readonly GanttBarSpan[] | null;
+}
+
+/** 工單工期。對齊 domain/view/types.ts 的 IssueDuration；MVP 種子資料無 StartTime，目前恆為 hasDuration:false。 */
+export type IssueDuration =
+  | { readonly hasDuration: true; readonly days: number; readonly unit: 'workingDay' | 'calendarDay' }
+  | { readonly hasDuration: false };
+
+/** 主題單清單的一列，帶三個顯示層級（主題/需求/工項）一次算好的甘特座標。 */
+export interface TopicIssueRow {
+  readonly id: string;
+  readonly key: string;
+  readonly title: string;
+  readonly duration: IssueDuration;
+  readonly levels: readonly DevOrderLevelGroup[];
+}
+
+/** 檢視主題單視角內容：/api/views/:id/issues 回應，供 DevOrderScreen 使用。 */
+export interface DevOrderIssuesResult {
+  readonly sortedIssues: readonly TopicIssueRow[];
+  readonly unsortedIssues: readonly TopicIssueRow[];
+  readonly calendarName: string | null;
+  readonly excludedCount: number;
+  readonly days: readonly GanttDay[];
+}
+
+/** 檢視內一筆手動排序項。對齊 viewRepo 的 ViewSortEntry。 */
+export interface ViewSortEntry {
+  readonly id: string;
+  readonly companyId: string;
+  readonly viewId: string;
+  readonly issueId: string;
+  readonly sortValue: number;
+}

@@ -1,10 +1,13 @@
 // 檢視 API · /api/views 之下的清單、建立、資料查詢
-//
-// 排序、篩選設定等其餘 /api/views 端點，等對應畫面（DevOrderScreen 等）
-// 真的要用時再封裝。
 
 import { apiFetch } from './client';
-import type { CreateViewInput, View, WorkspaceIssue } from './types';
+import type {
+  CreateViewInput,
+  DevOrderIssuesResult,
+  View,
+  ViewSortEntry,
+  WorkspaceIssue,
+} from './types';
 
 /** 當前帳號名下的檢視清單。 */
 export async function listMyViews(): Promise<readonly View[]> {
@@ -32,4 +35,25 @@ export async function createView(input: CreateViewInput): Promise<View> {
     body: { ...input, viewType: input.name, displayLevel: 1 },
   });
   return res.view;
+}
+
+/** 檢視的主題單視角內容：三個顯示層級一次算好的甘特座標、時間軸、日曆名稱。供 DevOrderScreen 使用。 */
+export async function getDevOrderIssues(viewId: string): Promise<DevOrderIssuesResult> {
+  return apiFetch<DevOrderIssuesResult>(`/api/views/${viewId}/issues`);
+}
+
+/**
+ * 指派工單於檢視的排序位置。targetIndex 是「把目標自己移出後」的插入位置
+ * （assignSortPosition 的既定契約），呼叫端負責換算，本函式只轉發。
+ */
+export async function setSortPosition(
+  viewId: string,
+  issueId: string,
+  targetIndex: number,
+): Promise<readonly ViewSortEntry[]> {
+  const res = await apiFetch<{ entries: readonly ViewSortEntry[] }>(
+    `/api/views/${viewId}/sort/${issueId}`,
+    { method: 'PUT', body: { targetIndex } },
+  );
+  return res.entries;
 }

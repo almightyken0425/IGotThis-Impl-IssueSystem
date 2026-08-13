@@ -43,13 +43,15 @@ export const LIST_SCREEN_TOKENS = {
   },
 
   // ─── 欄位顯示設定面板（impl 新增）───
-  COLUMN_PANEL_WIDTH: SPACING['3xl'] * 5, // 200
+  COLUMN_PANEL_WIDTH: SPACING['3xl'] * 6, // 240，比原 200 加寬，容納順序/寬度兩組按鈕
   COLUMN_PANEL_PADDING: SPACING.sm,
   COLUMN_PANEL_GAP: SPACING.xs,
+  COLUMN_PANEL_ROW_GAP: SPACING.xs, // 每列 checkbox 與後方按鈕群的間距
   COLUMN_PANEL_OFFSET: SPACING.xs, // 面板上緣與按鈕的距離
   COLUMN_PANEL_RADIUS: RADIUS.md,
   COLUMN_PANEL_BORDER_WIDTH: BORDER_WIDTH.hairline,
   COLUMN_PANEL_TITLE_TYPE: TYPE_STYLES.overline,
   COLUMN_PANEL_HINT_TYPE: TYPE_STYLES.caption,
   COLUMN_PANEL_Z: 4, // (literal: 疊層序，面板蓋過工具列與表格)
+  COLUMN_PANEL_WIDTH_STEP: SPACING.lg, // 16px，寬度增減鈕每次調整量
 } as const;

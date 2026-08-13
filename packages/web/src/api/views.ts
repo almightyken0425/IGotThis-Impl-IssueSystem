@@ -4,6 +4,7 @@ import { apiFetch } from './client';
 import type {
   CreateViewInput,
   DevOrderIssuesResult,
+  UpdateViewInput,
   View,
   ViewSortEntry,
   WorkspaceIssuesResult,
@@ -30,6 +31,15 @@ export async function createView(input: CreateViewInput): Promise<View> {
   const res = await apiFetch<{ view: View }>('/api/views', {
     method: 'POST',
     body: { ...input, viewType: input.name, displayLevel: 1 },
+  });
+  return res.view;
+}
+
+/** 更新檢視（PATCH 語意，未帶的欄不動）。回傳更新後的完整檢視。 */
+export async function updateView(viewId: string, input: UpdateViewInput): Promise<View> {
+  const res = await apiFetch<{ view: View }>(`/api/views/${viewId}`, {
+    method: 'PATCH',
+    body: input,
   });
   return res.view;
 }

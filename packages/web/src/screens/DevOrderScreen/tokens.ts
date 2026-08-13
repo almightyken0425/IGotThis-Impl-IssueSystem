@@ -29,6 +29,8 @@ export const DEV_ORDER_SCREEN_TOKENS = {
   BOARD_BORDER_WIDTH: BORDER_WIDTH.hairline,
 
   // 排程視窗天數。八週 ≈ 兩個月，桌面基準寬放不下整段，超出部分由板內橫向捲軸承接。
+  // 畫面邏輯不再讀這兩個值：時間軸改吃 /api/views/:id/issues 回傳的 days（後端
+  // DEV_ORDER_TIMELINE_DAY_COUNT 同為 56），此處保留只為與 design git 逐名對齊。
   TIMELINE_DAY_COUNT: 56, // (literal: 八週的日數，非視覺值)
   TIMELINE_TODAY_INDEX: 14, // (literal: 示例資料的今日落點，非視覺值)
 

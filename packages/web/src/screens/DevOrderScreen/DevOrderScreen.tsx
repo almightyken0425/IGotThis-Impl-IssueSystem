@@ -28,7 +28,7 @@ import { ApiError, viewsApi } from '../../api';
 import type { DevOrderIssuesResult, TopicIssueRow } from '../../api';
 import { useCurrentView } from '../../app/CurrentViewContext';
 import { Chip, IconButton } from '../../components/controls';
-import { EmptyState } from '../../components/data';
+import { EmptyState, FilterNotice } from '../../components/data';
 import { GanttHeader, LevelSwitcher, Toolbar } from '../../components/gantt';
 import { useAsync } from '../../hooks/useAsync';
 import {
@@ -312,6 +312,8 @@ export function DevOrderScreen() {
         ) : (
           board
         )}
+
+        <FilterNotice count={data?.permissionExcludedCount} />
       </div>
     </div>
   );

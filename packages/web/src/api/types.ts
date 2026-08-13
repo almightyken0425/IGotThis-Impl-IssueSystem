@@ -157,6 +157,7 @@ export interface DevOrderIssuesResult {
   readonly unsortedIssues: readonly TopicIssueRow[];
   readonly calendarName: string | null;
   readonly excludedCount: number;
+  readonly permissionExcludedCount: number;
   readonly days: readonly GanttDay[];
 }
 
@@ -167,4 +168,11 @@ export interface ViewSortEntry {
   readonly viewId: string;
   readonly issueId: string;
   readonly sortValue: number;
+}
+
+/** 檢視資料來源範圍內的完整欄位工單列：/api/views/:id/workspace-issues 回應，供 ListScreen／KanbanScreen 使用。 */
+export interface WorkspaceIssuesResult {
+  readonly issues: readonly WorkspaceIssue[];
+  readonly excludedCount: number;
+  readonly permissionExcludedCount: number;
 }

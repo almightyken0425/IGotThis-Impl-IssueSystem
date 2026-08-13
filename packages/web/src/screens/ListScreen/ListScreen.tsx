@@ -27,7 +27,7 @@ import { viewsApi, workspaceApi } from '../../api';
 import type { WorkspaceContext, WorkspaceIssue } from '../../api';
 import { useCurrentView } from '../../app/CurrentViewContext';
 import { Button, Checkbox, IconButton, Select, TextInput } from '../../components/controls';
-import { DataTable, EmptyState } from '../../components/data';
+import { DataTable, EmptyState, FilterNotice } from '../../components/data';
 import type {
   DueTone,
   SortState,
@@ -310,13 +310,24 @@ export function ListScreen() {
   const { currentView } = useCurrentView();
 
   const fetcher = useCallback(
-    async (): Promise<{ context: WorkspaceContext; issues: readonly WorkspaceIssue[] } | null> => {
+    async (): Promise<
+      | {
+          context: WorkspaceContext;
+          issues: readonly WorkspaceIssue[];
+          permissionExcludedCount: number;
+        }
+      | null
+    > => {
       if (currentView === null) return null;
-      const [context, issues] = await Promise.all([
+      const [context, workspaceIssues] = await Promise.all([
         workspaceApi.getWorkspace(),
         viewsApi.getWorkspaceIssues(currentView.id),
       ]);
-      return { context, issues };
+      return {
+        context,
+        issues: workspaceIssues.issues,
+        permissionExcludedCount: workspaceIssues.permissionExcludedCount,
+      };
     },
     // currentView 整個物件當依賴：CurrentViewContext 的 currentView 只在真正
     // 切換/新增檢視時換新的物件參照（.find() 命中同一元素回同一參照），
@@ -458,6 +469,8 @@ export function ListScreen() {
           padding: `${T.CONTENT_PADDING_Y}px ${T.CONTENT_PADDING_X}px`,
         }}
       >
+        <FilterNotice count={data?.permissionExcludedCount} />
+
         {createOpen && (
           <CreateIssueBar
             theme={theme}

@@ -5,13 +5,15 @@ import type { Pool } from 'pg';
 
 import { currentIdentity } from '../../auth/middleware.js';
 import { withTransaction } from '../../db/client.js';
-import { containerRepo, fieldRepo, issueRepo } from '../../db/repositories/index.js';
+import { containerRepo, fieldRepo, issueRepo, permissionRepo } from '../../db/repositories/index.js';
 import type {
   Company,
   FieldDef,
   IssueSet,
   IssueTypeDefinition,
+  LevelDefinition,
   ResolutionOptionInput,
+  Role,
   WorkflowTransitionInput,
 } from '../../db/repositories/index.js';
 import type { Executor } from '../../db/repositories/index.js';
@@ -83,6 +85,33 @@ const DEFAULT_TRANSITIONS: readonly WorkflowTransitionInput[] = [
 
 /** 沿用 spec 標準結案原因（no7_issue_model.md 的 StandardResolutionOptions）。 */
 const DEFAULT_RESOLUTIONS: readonly string[] = ['已完成', '不做'];
+
+/** 預設管理 Role 的標題；Roles 沒有 StandardRoles 這類 spec 資產，屬 impl 自訂命名，
+ *  同時作為「本 Company 是否已啟動過權限種子」的判準（見 ensurePermissionBootstrap）。 */
+const DEFAULT_ADMIN_ROLE_TITLE = '管理員';
+
+interface LevelSeed {
+  readonly name: string;
+  readonly canRead: boolean;
+  readonly canComment: boolean;
+  readonly canCreate: boolean;
+  readonly canEditOwn: boolean;
+  readonly canEditAny: boolean;
+  readonly canArchive: boolean;
+  readonly canStructure: boolean;
+  readonly canAssignRole: boolean;
+}
+
+/** 內建四等級，逐欄對齊 spec no1_data_models/no4_permission_model.md 的 StandardLevels 真值表。 */
+const STANDARD_LEVEL_SEEDS: readonly LevelSeed[] = [
+  { name: '觀看', canRead: true, canComment: false, canCreate: false, canEditOwn: false, canEditAny: false, canArchive: false, canStructure: false, canAssignRole: false },
+  { name: '回報', canRead: true, canComment: true, canCreate: true, canEditOwn: true, canEditAny: false, canArchive: false, canStructure: false, canAssignRole: false },
+  { name: '成員', canRead: true, canComment: true, canCreate: true, canEditOwn: true, canEditAny: true, canArchive: false, canStructure: false, canAssignRole: false },
+  { name: '管理', canRead: true, canComment: true, canCreate: true, canEditOwn: true, canEditAny: true, canArchive: true, canStructure: true, canAssignRole: true },
+];
+
+/** 預設管理 Role 引用的等級名稱；必為 STANDARD_LEVEL_SEEDS 之一。 */
+const BOOTSTRAP_LEVEL_NAME = '管理';
 
 interface FieldSeed {
   readonly name: string;
@@ -244,8 +273,97 @@ async function ensureIssueSet(tx: Executor, companyId: string): Promise<IssueSet
   return created.issueSet;
 }
 
+/**
+ * 確保內建四等級與一個預設管理 Role 存在；本 Company 從未有人被授予任何 Role 時，
+ * 把預設管理 Role 直接授予當前呼叫者（不經 checkRoleAssignment——那是給「已有
+ * 權限者分派給別人」的正常流程，套用在此必然回拒絕，因為誰都零 Role）。
+ *
+ * 沒有這步，任何新帳號 computeEffectivePermission 恆回全否（含 canRead），
+ * filterMgmtsByPermission 會把所有 Mgmt 判定無讀取權濾除；且無法後補——
+ * POST /api/permissions/levels、/roles 都要求操作者持有 permAdmin，
+ * 而 permAdmin 一樣來自 Role，形成沒有人能透過既有 API 解開的死結。
+ *
+ * 判準用「DEFAULT_ADMIN_ROLE_TITLE 的 Role 是否存在」，不是「AccountRoles
+ * 是否為空」：DELETE /api/permissions/accounts/:id/roles/:assignmentId 是既有、
+ * 可用的撤除端點，AccountRoles 可以被撤到零筆；若判準看那張表，管理員不慎撤光
+ * 所有人的 Role 之後，下一個剛好呼叫本函式的任何人會被誤判成「還沒啟動過」而
+ * 意外拿到管理權，是真實的權限提升風向。Role 目前沒有刪除端點，存在性單調不減，
+ * 適合當一次性判準——撤權後的空狀態會維持空，需要人工介入救回，不會被靜默接管。
+ *
+ * level_definitions／roles 皆無天然唯一約束可讓並發首次請求靠撞鍵擋重複插入
+ * （不像 ensureIssueType 倚賴 field_defs 的複合 PK），改用鎖 Company 列序列化。
+ */
+async function ensurePermissionBootstrap(
+  tx: Executor,
+  companyId: string,
+  accountId: string,
+): Promise<void> {
+  await containerRepo.lockCompanyForUpdate(companyId, tx);
+
+  const levels = await permissionRepo.listLevelDefinitions(tx, companyId);
+  const levelByName = new Map(levels.map((l) => [l.name, l]));
+  const now = Date.now();
+  for (const seed of STANDARD_LEVEL_SEEDS) {
+    if (levelByName.has(seed.name)) continue;
+    const level: LevelDefinition = {
+      id: randomUUID(),
+      companyId,
+      system: true,
+      createdOn: now,
+      updatedOn: now,
+      ...seed,
+    };
+    await permissionRepo.insertLevelDefinition(tx, level);
+    levelByName.set(level.name, level);
+  }
+
+  const roles = await permissionRepo.listRoles(tx, companyId);
+  if (roles.some((r) => r.roleTitle === DEFAULT_ADMIN_ROLE_TITLE)) return;
+
+  const managementLevel = levelByName.get(BOOTSTRAP_LEVEL_NAME);
+  /* v8 ignore next 3 -- BOOTSTRAP_LEVEL_NAME 恆在 STANDARD_LEVEL_SEEDS 之列，上面迴圈保證存在 */
+  if (managementLevel === undefined) {
+    throw new Error(`內建等級 ${BOOTSTRAP_LEVEL_NAME} 未種成`);
+  }
+
+  const role: Role = {
+    id: randomUUID(),
+    companyId,
+    roleTitle: DEFAULT_ADMIN_ROLE_TITLE,
+    levelId: managementLevel.id,
+    typeAdmin: true,
+    orgAdmin: true,
+    permAdmin: true,
+    tags: null,
+    createdOn: now,
+    updatedOn: now,
+  };
+  await permissionRepo.insertRole(tx, role);
+  await permissionRepo.insertRoleScope(tx, {
+    id: randomUUID(),
+    companyId,
+    roleId: role.id,
+    scopeKind: 'company',
+    scopeId: companyId,
+    createdOn: now,
+    updatedOn: now,
+  });
+  await permissionRepo.insertAccountRole(tx, {
+    id: randomUUID(),
+    companyId,
+    accountId,
+    roleId: role.id,
+    createdOn: now,
+    updatedOn: now,
+  });
+}
+
 /** 冪等啟動：種齊預設工作區並回傳脈絡。並發下撞唯一約束則重讀既有狀態。 */
-async function ensureWorkspace(pool: Pool, companyId: string): Promise<WorkspaceContext> {
+async function ensureWorkspace(
+  pool: Pool,
+  companyId: string,
+  accountId: string,
+): Promise<WorkspaceContext> {
   const company = await containerRepo.getCompany(companyId, pool);
   if (company === undefined) {
     throw new Error('當前身分的 Company 不存在');
@@ -268,6 +386,10 @@ async function ensureWorkspace(pool: Pool, companyId: string): Promise<Workspace
     issueType = type;
     issueSet = set;
   }
+
+  // 獨立一個 transaction，不塞進上面那個：容器/工單型別種子跟權限種子失敗域無關，
+  // 不該互相拖累對方 rollback，也不動上面既有的 unique-violation 復原邏輯。
+  await withTransaction((tx) => ensurePermissionBootstrap(tx, companyId, accountId), pool);
 
   const states = await issueRepo.listWorkflowStates(companyId, issueType.id, pool);
   const resolutionOptions = await issueRepo.listResolutionOptions(companyId, issueType.id, pool);
@@ -366,15 +488,15 @@ export const workspaceRoutes: FastifyPluginAsync<WorkspaceRoutesOptions> = async
 
   // 啟動工作區並回脈絡；冪等，前端登入後首呼即可拿到工單集與型別。
   app.get('/', async (request, reply) => {
-    const { companyId } = currentIdentity(request);
-    const context = await ensureWorkspace(pool, companyId);
+    const { accountId, companyId } = currentIdentity(request);
+    const context = await ensureWorkspace(pool, companyId, accountId);
     return reply.status(200).send(context);
   });
 
   // 加值工單列：工作區工單集下的工單摺疊欄位單值。
   app.get('/issues', async (request, reply) => {
-    const { companyId } = currentIdentity(request);
-    const context = await ensureWorkspace(pool, companyId);
+    const { accountId, companyId } = currentIdentity(request);
+    const context = await ensureWorkspace(pool, companyId, accountId);
     const issues = await issueRepo.listIssuesByIssueSet(companyId, context.issueSet.id, pool);
     const rows: WorkspaceIssueRow[] = [];
     for (const issue of issues) {
@@ -389,7 +511,7 @@ export const workspaceRoutes: FastifyPluginAsync<WorkspaceRoutesOptions> = async
     { schema: { body: createIssueBodySchema } },
     async (request, reply) => {
       const { accountId, companyId } = currentIdentity(request);
-      const context = await ensureWorkspace(pool, companyId);
+      const context = await ensureWorkspace(pool, companyId, accountId);
       const body = request.body;
 
       const issue = await withTransaction(async (tx) => {

@@ -110,6 +110,18 @@ export async function getCompany(
   return row ? toCompany(row) : undefined;
 }
 
+/**
+ * 鎖住指定 Company 列，供並發的一次性種子流程（如 workspace.ts 的
+ * ensurePermissionBootstrap）序列化用。不讀取有意義欄位，純粹取鎖；
+ * 呼叫端須自行包在交易內，鎖隨交易 commit/rollback 釋放。
+ */
+export async function lockCompanyForUpdate(
+  id: string,
+  exec: Executor = getPool(),
+): Promise<void> {
+  await run(exec, 'SELECT id FROM companies WHERE id = $1 FOR UPDATE', [id]);
+}
+
 export async function listCompanies(exec: Executor = getPool()): Promise<Company[]> {
   const rows = await run<CompanyRow>(exec, 'SELECT id, name FROM companies ORDER BY name');
   return rows.map(toCompany);

@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { fieldRepo } from '../../db/repositories/index.js';
+import { fieldRepo, permissionRepo } from '../../db/repositories/index.js';
 import { authed, bootstrap, registerSession, testUrl, type Session } from './testHarness.js';
 
 /**
@@ -366,5 +366,151 @@ suite('workspace routes', () => {
 
     const after = await fieldRepo.listChangeLog(session.companyId, created.id, pool);
     expect(after).toHaveLength(before.length);
+  });
+
+  // ----- 權限啟動種子 -----
+  // 解開零 Role 死結：ensurePermissionBootstrap 掛在 ensureWorkspace 內，
+  // 見 workspace.ts 同名函式的完整理由註解。
+
+  describe('權限啟動種子', () => {
+    it('首次啟動種出四個內建等級，八開關對照 spec 真值表', async () => {
+      await call({ method: 'GET', url: '/api/workspace' });
+      const levels = await permissionRepo.listLevelDefinitions(pool, session.companyId);
+      const byName = new Map(levels.map((l) => [l.name, l]));
+      expect(byName.size).toBe(4);
+      expect(byName.get('觀看')).toMatchObject({
+        canRead: true,
+        canComment: false,
+        canCreate: false,
+        canEditOwn: false,
+        canEditAny: false,
+        canArchive: false,
+        canStructure: false,
+        canAssignRole: false,
+      });
+      expect(byName.get('回報')).toMatchObject({
+        canRead: true,
+        canComment: true,
+        canCreate: true,
+        canEditOwn: true,
+        canEditAny: false,
+        canArchive: false,
+        canStructure: false,
+        canAssignRole: false,
+      });
+      expect(byName.get('成員')).toMatchObject({
+        canRead: true,
+        canComment: true,
+        canCreate: true,
+        canEditOwn: true,
+        canEditAny: true,
+        canArchive: false,
+        canStructure: false,
+        canAssignRole: false,
+      });
+      expect(byName.get('管理')).toMatchObject({
+        canRead: true,
+        canComment: true,
+        canCreate: true,
+        canEditOwn: true,
+        canEditAny: true,
+        canArchive: true,
+        canStructure: true,
+        canAssignRole: true,
+      });
+    });
+
+    it('首次啟動的呼叫者取得管理員 Role，公司範圍、三個公司層開關皆真', async () => {
+      await call({ method: 'GET', url: '/api/workspace' });
+      const links = await permissionRepo.listAccountRoles(pool, session.companyId, session.accountId);
+      expect(links).toHaveLength(1);
+
+      const role = await permissionRepo.getRole(pool, session.companyId, links[0]!.roleId);
+      expect(role).toMatchObject({ roleTitle: '管理員', typeAdmin: true, orgAdmin: true, permAdmin: true });
+
+      const scopes = await permissionRepo.listRoleScopes(pool, session.companyId, role!.id);
+      expect(scopes).toEqual([
+        expect.objectContaining({ scopeKind: 'company', scopeId: session.companyId }),
+      ]);
+    });
+
+    it('冪等：連續呼叫兩次，等級與 Role 筆數不變', async () => {
+      await call({ method: 'GET', url: '/api/workspace' });
+      const levelsFirst = await permissionRepo.listLevelDefinitions(pool, session.companyId);
+      const rolesFirst = await permissionRepo.listRoles(pool, session.companyId);
+
+      await call({ method: 'GET', url: '/api/workspace' });
+      const levelsSecond = await permissionRepo.listLevelDefinitions(pool, session.companyId);
+      const rolesSecond = await permissionRepo.listRoles(pool, session.companyId);
+
+      expect(levelsSecond).toHaveLength(levelsFirst.length);
+      expect(rolesSecond).toHaveLength(rolesFirst.length);
+    });
+
+    it('端到端解鎖：啟動後操作者通過 permAdmin 檢查，POST /levels 回 201（此前恆 403）', async () => {
+      await call({ method: 'GET', url: '/api/workspace' });
+      const res = await call({
+        method: 'POST',
+        url: '/api/permissions/levels',
+        payload: { name: '自訂等級', canRead: true },
+      });
+      expect(res.statusCode).toBe(201);
+    });
+
+    it('第二個註冊者（同 Company）呼叫工作區後仍是零 Role', async () => {
+      await call({ method: 'GET', url: '/api/workspace' }); // 第一人啟動，取得管理員 Role
+      const second = await registerSession(app, 'second@example.com');
+      // 單一 Company 模式：第二人註冊綁同一租戶，不是獨立 Company。
+      expect(second.companyId).toBe(session.companyId);
+
+      const secondCall = authed(app, second.cookie);
+      await secondCall({ method: 'GET', url: '/api/workspace' });
+
+      const links = await permissionRepo.listAccountRoles(pool, second.companyId, second.accountId);
+      expect(links).toHaveLength(0);
+    });
+
+    it('Role 已存在但尚未指派任何人時，不誤判成需要重新授予', async () => {
+      const now = Date.now();
+      const levelId = randomUUID();
+      await permissionRepo.insertLevelDefinition(pool, {
+        id: levelId,
+        companyId: session.companyId,
+        name: '管理',
+        system: true,
+        canRead: true,
+        canComment: true,
+        canCreate: true,
+        canEditOwn: true,
+        canEditAny: true,
+        canArchive: true,
+        canStructure: true,
+        canAssignRole: true,
+        createdOn: now,
+        updatedOn: now,
+      });
+      const roleId = randomUUID();
+      await permissionRepo.insertRole(pool, {
+        id: roleId,
+        companyId: session.companyId,
+        roleTitle: '管理員',
+        levelId,
+        typeAdmin: true,
+        orgAdmin: true,
+        permAdmin: true,
+        tags: null,
+        createdOn: now,
+        updatedOn: now,
+      });
+      // 刻意不指派給任何人，模擬「Role 存在但沒人被授予」的邊界（見 workspace.ts
+      // ensurePermissionBootstrap 註解：判準看 Role 存在與否，不看 AccountRoles）。
+
+      await call({ method: 'GET', url: '/api/workspace' });
+
+      const roles = await permissionRepo.listRoles(pool, session.companyId);
+      expect(roles.filter((r) => r.roleTitle === '管理員')).toHaveLength(1); // 沒有重種第二筆
+      const links = await permissionRepo.listAccountRoles(pool, session.companyId, session.accountId);
+      expect(links).toHaveLength(0); // 呼叫者沒有被意外授予
+    });
   });
 });

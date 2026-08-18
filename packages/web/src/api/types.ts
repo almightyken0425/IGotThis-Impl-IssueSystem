@@ -184,3 +184,81 @@ export interface WorkspaceIssuesResult {
   readonly excludedCount: number;
   readonly permissionExcludedCount: number;
 }
+
+// ─── 工單詳情頁：基本識別、欄位定義、關聯、異動歷史 ──────────
+// 供 IssueDetailScreen 使用。對齊後端 fieldRepo／issueRepo／relationRepo／
+// domain 的同名實體；relations.ts／issues.ts／fields.ts 三個 API 檔共用。
+
+/** 工單基本識別，不含欄位值。對齊 issueRepo／domain 的 Issue。 */
+export interface IssueSummary {
+  readonly id: string;
+  readonly companyId: string;
+  readonly issueSetId: string;
+  readonly issueTypeId: string;
+  readonly issueKey: string;
+}
+
+/** 欄位定義：label／readonly／kind 等中繼資料。對齊 fieldRepo 的 FieldDef。 */
+export interface FieldDef {
+  readonly companyId: string;
+  readonly name: string;
+  readonly fieldSetName: string;
+  readonly kind: 'single' | 'multi' | 'relation';
+  readonly valueType: string;
+  readonly system: boolean;
+  /** 為真代表值由系統寫入，使用者不可編輯。 */
+  readonly readonly: boolean;
+  readonly rollupable: boolean;
+  readonly rollupFn: 'earliest' | 'latest' | 'sum' | null;
+  /** 為真的欄位每次異動寫進變更歷史。 */
+  readonly tracked: boolean;
+  readonly label: string;
+}
+
+/** 工單單一欄位值。對齊 issueRepo 的 StoredFieldValue。 */
+export interface IssueFieldValue {
+  readonly companyId: string;
+  readonly issueId: string;
+  readonly fieldName: string;
+  readonly value: unknown;
+  readonly rollupMode: 'auto' | 'manual' | null;
+}
+
+/** 一筆變更歷史：對齊 domain 的 ChangeLogEntry，另帶 id 供列表 key 使用。 */
+export interface ChangeLogEntry {
+  readonly id: string;
+  readonly fieldName: string;
+  readonly oldValue: unknown;
+  readonly newValue: unknown;
+  readonly actor: string;
+  readonly time: number;
+}
+
+/** 關聯型別定義。對齊 domain 的 RelationTypeDefinition。 */
+export interface RelationTypeDefinition {
+  readonly id: string;
+  readonly companyId: string;
+  readonly name: string;
+  readonly exclusive: boolean;
+  readonly acyclic: boolean;
+  readonly ordered: boolean;
+  /** 為真時關聯無方向，正反查詢視為同一關係。 */
+  readonly symmetric: boolean;
+  readonly rollup: boolean;
+  readonly system: boolean;
+  readonly createdOn: number;
+  readonly updatedOn: number;
+}
+
+/** 工單關聯。對齊 domain 的 IssueRelation；只存持有端一側，正反查見 relations.ts。 */
+export interface IssueRelation {
+  readonly id: string;
+  readonly companyId: string;
+  readonly fromIssueId: string;
+  readonly toIssueId: string;
+  readonly relationTypeId: string;
+  readonly ordinal: number;
+  readonly exclusive: boolean;
+  readonly createdOn: number;
+  readonly updatedOn: number;
+}

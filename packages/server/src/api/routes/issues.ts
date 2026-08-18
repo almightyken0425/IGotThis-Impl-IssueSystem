@@ -5,7 +5,7 @@ import type { Pool } from 'pg';
 
 import { currentIdentity } from '../../auth/middleware.js';
 import { withTransaction } from '../../db/client.js';
-import { containerRepo, issueRepo } from '../../db/repositories/index.js';
+import { containerRepo, fieldRepo, issueRepo } from '../../db/repositories/index.js';
 import { formatIssueKey } from '../../domain/index.js';
 import type { RollupMode } from '../../domain/index.js';
 import { isForeignKeyViolation, sendError } from '../errors.js';
@@ -296,6 +296,32 @@ export const issueRoutes: FastifyPluginAsync<IssueRoutesOptions> = async (
         return sendError(reply, 404, 'NOT_FOUND', '欄位值不存在');
       }
       return reply.status(204).send();
+    },
+  );
+
+  // ==========================================================
+  // 工單異動歷史（ChangeLog）
+  //
+  // 唯讀列出，供工單詳情頁的異動歷史區使用。對齊 Spec
+  // no3_logics/no6_changelog_logic.md 的 listIssueChangelog：純讀取、
+  // 依時間新到舊排序。fieldRepo.listChangeLog 回傳的是寫入（追加）順序，
+  // 即由舊到新，本路由反轉後送出以滿足該讀取契約；記錄本身的寫入（含
+  // 追蹤範圍判斷）仍只由 recordFieldChange 經既有欄位寫入路徑產生，本路由
+  // 不寫入任何資料。
+  // ==========================================================
+
+  app.get<{ Params: { issueId: string } }>(
+    '/issues/:issueId/changelog',
+    { schema: { params: idParams('issueId') } },
+    async (request, reply) => {
+      const { companyId } = currentIdentity(request);
+      const issue = await issueRepo.getIssue(companyId, request.params.issueId, pool);
+      if (issue === undefined) {
+        return sendError(reply, 404, 'NOT_FOUND', '工單不存在');
+      }
+      const records = await fieldRepo.listChangeLog(companyId, request.params.issueId, pool);
+      const changeLog = [...records].reverse();
+      return reply.status(200).send({ changeLog });
     },
   );
 };

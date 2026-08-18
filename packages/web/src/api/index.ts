@@ -6,18 +6,27 @@ export type { LoginInput, RegisterInput } from './auth';
 export * as workspaceApi from './workspace';
 export * as containersApi from './containers';
 export * as viewsApi from './views';
+export * as issuesApi from './issues';
+export * as fieldsApi from './fields';
+export * as relationsApi from './relations';
 export type {
   Account,
+  ChangeLogEntry,
   Company,
   CreateIssueInput,
   CreateViewInput,
   DevOrderIssuesResult,
   DevOrderLevelGroup,
+  FieldDef,
   GanttBarSpan,
   GanttDay,
   IssueDuration,
+  IssueFieldValue,
+  IssueRelation,
+  IssueSummary,
   Mgmt,
   Product,
+  RelationTypeDefinition,
   Team,
   TopicIssueRow,
   UpdateIssueInput,

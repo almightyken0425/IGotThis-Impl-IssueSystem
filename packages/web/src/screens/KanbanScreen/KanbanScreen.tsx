@@ -20,6 +20,7 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import type { DragEvent } from 'react';
+import { useNavigate } from 'react-router';
 
 import { ApiError, viewsApi, workspaceApi } from '../../api';
 import type { WorkspaceContext, WorkspaceIssue } from '../../api';
@@ -66,6 +67,7 @@ interface KanbanData {
 
 export function KanbanScreen() {
   const { theme } = useTheme();
+  const navigate = useNavigate();
   const { currentView } = useCurrentView();
 
   const fetcher = useCallback(async (): Promise<KanbanData | null> => {
@@ -296,6 +298,7 @@ export function KanbanScreen() {
                         ghost={draggingKey === issue.key}
                         loading={pendingKey === issue.key}
                         draggable
+                        onClick={() => navigate(`/issues/${issue.id}`)}
                         onDragStart={(event) => onCardDragStart(issue.key, event)}
                         onDragEnd={endDrag}
                       />

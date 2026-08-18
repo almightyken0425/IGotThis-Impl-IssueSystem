@@ -23,6 +23,7 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import type { DragEvent } from 'react';
+import { useNavigate } from 'react-router';
 
 import { ApiError, viewsApi } from '../../api';
 import type { DevOrderIssuesResult, TopicIssueRow } from '../../api';
@@ -70,6 +71,7 @@ function toDevOrderIssue(row: TopicIssueRow): DevOrderIssue {
 
 export function DevOrderScreen() {
   const { theme } = useTheme();
+  const navigate = useNavigate();
   const colors = resolveGanttColors(theme);
   const density = T.DENSITY;
   const listWidth = T.LIST_COLUMN_WIDTH;
@@ -92,6 +94,17 @@ export function DevOrderScreen() {
   const [dropIndex, setDropIndex] = useState<number | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [dropError, setDropError] = useState<string | undefined>(undefined);
+
+  // 點擊列或長條觸發。selectedId 除了驅動這裡的導覽，toRows 也讀它算 SortableRow／
+  // GanttBar 的 selected 反白（見下方 toRows），故不能單純把 onSelect 換成導覽、
+  // 移除 setSelectedId——兩個用途都要留著，這裡合併成一個 handler 同時做。
+  const onSelect = useCallback(
+    (id: string) => {
+      setSelectedId(id);
+      navigate(`/issues/${id}`);
+    },
+    [navigate],
+  );
 
   const toRows = useCallback(
     (rows: readonly TopicIssueRow[]): readonly DevOrderRow[] =>
@@ -201,7 +214,7 @@ export function DevOrderScreen() {
             levelId={level}
             dropIndex={dropIndex ?? undefined}
             dragLocked={dragLocked}
-            onSelect={setSelectedId}
+            onSelect={onSelect}
             onDragStart={onDragStart}
             onDragEnd={endDrag}
             onDropIndexChange={onDropIndexChange}
@@ -224,7 +237,7 @@ export function DevOrderScreen() {
             levelId={level}
             showBars={false}
             dragLocked={dragLocked}
-            onSelect={setSelectedId}
+            onSelect={onSelect}
             onDragStart={onDragStart}
             onDragEnd={endDrag}
           />

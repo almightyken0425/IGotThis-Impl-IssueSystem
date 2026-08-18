@@ -10,6 +10,7 @@ import { createBrowserRouter, Navigate } from 'react-router';
 
 import { RequireAuth } from '../auth/RequireAuth';
 import { DevOrderScreen } from '../screens/DevOrderScreen';
+import { IssueDetailScreen } from '../screens/IssueDetailScreen';
 import { KanbanScreen } from '../screens/KanbanScreen';
 import { ListScreen } from '../screens/ListScreen';
 import { LoginScreen } from '../screens/LoginScreen';
@@ -43,6 +44,9 @@ export const router = createBrowserRouter([
           { path: 'list', element: <ListScreen /> },
           { path: 'kanban', element: <KanbanScreen /> },
           { path: 'dev-order', element: <DevOrderScreen /> },
+          // 工單詳情頁：List/Kanban/DevOrder 三畫面點擊工單導覽至此，不掛側邊導覽列
+          // （不進 NAV_ITEMS）——這是三畫面的下鑽頁，不是頂層導覽目的地。
+          { path: 'issues/:issueId', element: <IssueDetailScreen /> },
           // 未知路徑退回預設檢視，不留白畫面。
           { path: '*', element: <Navigate to={DEFAULT_PATH} replace /> },
         ],

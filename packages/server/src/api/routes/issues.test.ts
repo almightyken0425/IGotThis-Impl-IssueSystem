@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { fieldRepo } from '../../db/repositories/index.js';
 import { authed, bootstrap, registerSession, testUrl, type Session } from './testHarness.js';
 
 // 工單路由整合測試：以 Fastify inject 打真路由連 igotthis_test。
@@ -251,6 +252,52 @@ suite('issue routes', () => {
       url: `/api/issues/${randomUUID()}/fields/${FIELD_NAME}`,
       payload: { value: 'x' },
     });
+    expect(res.statusCode).toBe(404);
+  });
+
+  // ---- 異動歷史 ----
+
+  it('列出工單異動歷史，依時間新到舊排序', async () => {
+    const issue = await createIssue();
+
+    // ChangeLog 為系統多筆欄位，issue_field_records 對 (company_id, field_name)
+    // 有外鍵指向 field_defs，寫入前須先有這筆定義；本檔 fixture 未經 workspace
+    // 的 ensureIssueType 啟動流程，比照其種子內容直插。
+    await pool.query(
+      `INSERT INTO field_defs
+         (company_id, name, field_set_name, kind, value_type, system, readonly, rollupable, rollup_fn, tracked, label)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [session.companyId, 'ChangeLog', '基本', 'multi', 'text', true, true, false, null, false, '變更歷史'],
+    );
+
+    const earlier = Date.now() - 1000;
+    const later = Date.now();
+    const writeEntry = (time: number, oldValue: unknown, newValue: unknown) =>
+      fieldRepo.appendChangeLog(
+        {
+          id: randomUUID(),
+          companyId: session.companyId,
+          issueId: issue.id,
+          entry: { fieldName: 'status', oldValue, newValue, actor: session.accountId, time },
+          authorId: session.accountId,
+          createdOn: time,
+        },
+        pool,
+      );
+    await writeEntry(earlier, null, '待處理');
+    await writeEntry(later, '待處理', '處理中');
+
+    const res = await call({ method: 'GET', url: `/api/issues/${issue.id}/changelog` });
+    expect(res.statusCode).toBe(200);
+    const changeLog = res.json().changeLog as ReadonlyArray<{ value: { newValue: unknown } }>;
+    expect(changeLog).toHaveLength(2);
+    // 新到舊：後寫入的 (待處理→處理中) 排最前。
+    expect(changeLog[0]!.value.newValue).toBe('處理中');
+    expect(changeLog[1]!.value.newValue).toBe('待處理');
+  });
+
+  it('對不存在的工單取異動歷史回 404', async () => {
+    const res = await call({ method: 'GET', url: `/api/issues/${randomUUID()}/changelog` });
     expect(res.statusCode).toBe(404);
   });
 });

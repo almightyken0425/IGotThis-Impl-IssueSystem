@@ -23,6 +23,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useNavigate } from 'react-router';
 
 import { ApiError, viewsApi, workspaceApi } from '../../api';
 import type { WorkspaceContext, WorkspaceIssue } from '../../api';
@@ -402,6 +403,7 @@ function CreateIssueBar({ theme, submitting, error, onSubmit, onCancel }: Create
 
 export function ListScreen() {
   const { theme } = useTheme();
+  const navigate = useNavigate();
   const { currentView, updateView } = useCurrentView();
 
   const fetcher = useCallback(
@@ -537,6 +539,12 @@ export function ListScreen() {
     setSelectedIds((ids) => (ids.includes(row.id) ? [] : [row.id]));
   }, []);
 
+  // 列的第二動作：雙擊開啟工單詳情頁。row.id 即 WorkspaceIssue.id（見 toTableRow）。
+  const onRowActivate = useCallback(
+    (row: TableRow) => navigate(`/issues/${row.id}`),
+    [navigate],
+  );
+
   const visibleColumnKeys = useMemo(
     () => new Set(columnConfigDraft.map((entry) => entry.key)),
     [columnConfigDraft],
@@ -671,6 +679,7 @@ export function ListScreen() {
             groupBy={effectiveGroupBy}
             selectedIds={selectedIds}
             onRowSelect={onRowSelect}
+            onRowActivate={onRowActivate}
             emptyState={
               <EmptyState
                 title="還沒有工單"

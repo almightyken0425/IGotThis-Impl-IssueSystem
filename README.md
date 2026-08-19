@@ -178,10 +178,11 @@
     - workspace.ts 的角色查詢已補真實資料，issues.ts 泛用欄位路徑已擋 status／resolution，不再能繞過轉換規則
     - 目前沒有管理介面能建立帶 `requiredRole` 的轉換規則，歸在 web_shell 條目的型別維護與定義區管理介面待補範疇
 - **view_layer：**
-    - 日曆選用套用待接
-    - 工期天數呈現待接
-    - 新單自動入表待接
-    - 篩選待接
+    - `resolveViewCalendar`／`computeIssueDuration`／`admitNewContainerIssue`／`applyViewFilter` 四個 domain 函式皆已接進 views.ts
+    - 新單自動入表已完成，ListScreen 建單後自動 reload
+    - 工期天數呈現已在 DevOrderScreen 完成，不是 ListScreen 缺口
+    - 日曆選用僅 DevOrderScreen 唯讀顯示，AddViewForm 未定案設定入口，待補 design
+    - 篩選的按鈕與已套用條件展示 design 已定案，前端未接；篩選面板本身互動 design 未定案，待補
     - DevOrderScreen 甘特圖座標轉換待做，需求為工單起訖日期換算時間軸格子、三層級同時載入，後端完全沒有，需另開獨立主題
 - **web_shell：**
     - 工單詳情頁已補（`IssueDetailScreen`）：欄位／關聯／異動歷史三區，List／Kanban／DevOrder 三處入口可導覽進入

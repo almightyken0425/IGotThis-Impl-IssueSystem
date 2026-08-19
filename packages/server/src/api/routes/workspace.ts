@@ -609,10 +609,11 @@ export const workspaceRoutes: FastifyPluginAsync<WorkspaceRoutesOptions> = async
 
         if (statusChanging) {
           const targetStatus = body.status as string;
-          const [states, transitions, resolutionOptions] = await Promise.all([
+          const [states, transitions, resolutionOptions, roleBundles] = await Promise.all([
             issueRepo.listWorkflowStates(companyId, issue.issueTypeId, tx),
             issueRepo.listWorkflowTransitions(companyId, issue.issueTypeId, tx),
             issueRepo.listResolutionOptions(companyId, issue.issueTypeId, tx),
+            permissionRepo.getEffectivePermissionInputs(tx, companyId, accountId),
           ]);
           const fieldsWithValue = [...byName.entries()]
             .filter(([, value]) => hasFieldValue(value))
@@ -631,7 +632,7 @@ export const workspaceRoutes: FastifyPluginAsync<WorkspaceRoutesOptions> = async
             },
             issue: { currentStatus, fieldsWithValue },
             targetStatus,
-            actor: { roleNames: [] },
+            actor: { roleNames: roleBundles.map((b) => b.role.roleTitle) },
             resolution: body.resolution ?? null,
           });
           if (!result.ok) {

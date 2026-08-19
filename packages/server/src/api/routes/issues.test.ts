@@ -246,6 +246,30 @@ suite('issue routes', () => {
     expect(res.json().error.code).toBe('FIELD_NOT_DEFINED');
   });
 
+  it('泛用路徑寫 status／resolution 回 422，不繞過工單流程規則', async () => {
+    const issue = await createIssue();
+
+    const statusRes = await call({
+      method: 'PUT',
+      url: `/api/issues/${issue.id}/fields/status`,
+      payload: { value: '已完成' },
+    });
+    expect(statusRes.statusCode).toBe(422);
+    expect(statusRes.json().error.code).toBe('FIELD_REQUIRES_WORKFLOW_TRANSITION');
+
+    const resolutionRes = await call({
+      method: 'PUT',
+      url: `/api/issues/${issue.id}/fields/resolution`,
+      payload: { value: '已解決' },
+    });
+    expect(resolutionRes.statusCode).toBe(422);
+    expect(resolutionRes.json().error.code).toBe('FIELD_REQUIRES_WORKFLOW_TRANSITION');
+
+    // 兩次都被擋下，欄位值不應存在。
+    const got = await call({ method: 'GET', url: `/api/issues/${issue.id}/fields/status` });
+    expect(got.statusCode).toBe(404);
+  });
+
   it('對不存在的工單寫欄位值回 404', async () => {
     const res = await call({
       method: 'PUT',

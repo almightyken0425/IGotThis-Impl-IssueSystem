@@ -14,12 +14,11 @@
 // 任一欄位／Status 寫入成功後整個 reload()，不做樂觀本地更新——失敗時畫面
 // 自然維持原資料，滿足 Spec「操作失敗時 Status 維持原值」而不必另寫回滾。
 //
-// 編輯範圍（v1 刻意收斂）：只開放 workspace.ts PATCH /api/workspace/issues/:id
-// 認得的 6 個白名單欄位（title/status/resolution/assignee/point/due）。
-// status/resolution 一組走 Status 控件觸發的 changeIssueStatus 流程；
-// 其餘白名單欄位走同一個 PATCH 的一般欄位寫入。白名單外、readonly=false
-// 的欄位這次先唯讀顯示——見下方 renderFieldValue 內的專門註解與
-// impl 根目錄 README.md「待接事項」。
+// 編輯範圍：status/resolution 走 Status 控件觸發的 changeIssueStatus 流程；
+// title/assignee/point/due 四個白名單欄位走 workspace.ts PATCH 的一般欄位
+// 寫入；其餘 readonly=false 的欄位（含自訂欄位）走 issues.ts 泛用路徑
+// PUT /issues/:issueId/fields/:fieldName，對齊 design 定案：非唯讀欄位一律
+// 可編輯，不分值型別，值一律當字串送出（見下方 renderFieldValue）。
 
 import { useCallback, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
@@ -226,6 +225,25 @@ export function IssueDetailScreen() {
     [issueId, reload, pendingField],
   );
 
+  // 白名單外的一般欄位（含自訂欄位）提交：走 issues.ts 泛用路徑，值一律當字串，
+  // 不做型別轉換——對齊 design 定案，只有 point（白名單內）特殊處理數字。
+  const commitGenericField = useCallback(
+    async (fieldName: string, text: string) => {
+      if (pendingField !== null) return;
+      setPendingField(fieldName);
+      setFieldError(undefined);
+      try {
+        await issuesApi.updateFieldValue(issueId, fieldName, text);
+        await reload();
+      } catch (err: unknown) {
+        setFieldError(err instanceof ApiError ? err.message : '更新失敗');
+      } finally {
+        setPendingField(null);
+      }
+    },
+    [issueId, reload, pendingField],
+  );
+
   // 一般欄位（非 Status）文字提交：型別轉換與空值語意集中於此，EditableTextField 只管字串草稿。
   const commitTextField = useCallback(
     (fieldName: string, text: string) => {
@@ -368,12 +386,15 @@ export function IssueDetailScreen() {
       );
     }
 
-    // v1 刻意收斂：readonly=false 但不在白名單內的欄位，這次先唯讀顯示。
-    // 原因是目前只有 workspace.ts 的 PATCH /api/workspace/issues/:id 這條寫入
-    // 路徑會呼叫 recordFieldChange、正確記錄變更歷史；issues.ts 的泛用欄位
-    // 寫入路徑（PUT /issues/:issueId/fields/:fieldName）尚未補上這段，這次
-    // 刻意不動那條既有路徑（見 impl 根目錄 README.md「待接事項」）。
-    return <ReadOnlyValue text={displayValue(raw)} />;
+    // 白名單外、readonly=false 的欄位（含自訂欄位）：對齊 design 定案一律可編輯，
+    // 走 issues.ts 泛用路徑，值當字串送出，不分值型別。
+    return (
+      <EditableTextField
+        value={asString(raw)}
+        disabled={pendingField === def.name}
+        onCommit={(text) => void commitGenericField(def.name, text)}
+      />
+    );
   }
 
   return (

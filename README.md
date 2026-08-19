@@ -183,10 +183,11 @@
     - 工期天數呈現已在 DevOrderScreen 完成，不是 ListScreen 缺口
     - 日曆選用僅 DevOrderScreen 唯讀顯示，AddViewForm 未定案設定入口，待補 design
     - 篩選的按鈕與已套用條件展示 design 已定案，前端未接；篩選面板本身互動 design 未定案，待補
-    - DevOrderScreen 甘特圖座標轉換待做，需求為工單起訖日期換算時間軸格子、三層級同時載入，後端完全沒有，需另開獨立主題
+    - DevOrderScreen 甘特圖座標轉換已完成，`devOrderGantt.ts` 有 23 組測試、已接進 views.ts 的 GET /:id/issues，三層級是後端真算的，非另開獨立主題
+    - 長條普遍空白不是邏輯缺口，是 StartTime／EndTime 兩個標準欄位沒被種進系統，歸在 web_shell 條目的型別維護與定義區管理介面待補範疇
 - **web_shell：**
     - 工單詳情頁已補（`IssueDetailScreen`）：欄位／關聯／異動歷史三區，List／Kanban／DevOrder 三處入口可導覽進入
     - 工單詳情頁的欄位編輯已對齊 design 定案：非唯讀欄位一律可編輯，不分值型別。白名單四欄位 title/assignee/point/due 走 workspace.ts PATCH，其餘含自訂欄位走 issues.ts 泛用路徑，兩條都已記變更歷史
-    - 型別維護與定義區管理介面待補
+    - 型別維護與定義區管理介面待補，同時卡住 StartTime／EndTime 兩個標準欄位的植入，連帶影響甘特圖長條能不能顯示
     - 登入頁在 design git 尚無定案畫面，目前以既有 token 就地組值頂著
     - 主題選擇未接持久化，`initialThemeId` 與 `onThemeChange` 待接，目前每次載入固定回 light

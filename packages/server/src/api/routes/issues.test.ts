@@ -255,6 +255,42 @@ suite('issue routes', () => {
     expect(res.statusCode).toBe(404);
   });
 
+  it('寫入 tracked 欄位記錄變更歷史，oldValue 首筆為 null', async () => {
+    const trackedField = 'TrackedNote';
+    await pool.query(
+      `INSERT INTO field_defs
+         (company_id, name, field_set_name, kind, value_type, system, readonly, rollupable, rollup_fn, tracked, label)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [session.companyId, trackedField, '基本', 'single', 'text', false, false, false, null, true, '追蹤備註'],
+    );
+    const issue = await createIssue();
+
+    await call({
+      method: 'PUT',
+      url: `/api/issues/${issue.id}/fields/${trackedField}`,
+      payload: { value: 'v1' },
+    });
+    const afterFirst = await call({ method: 'GET', url: `/api/issues/${issue.id}/changelog` });
+    const firstLog = afterFirst.json().changeLog as ReadonlyArray<{
+      value: { fieldName: string; oldValue: unknown; newValue: unknown };
+    }>;
+    expect(firstLog).toHaveLength(1);
+    expect(firstLog[0]!.value).toMatchObject({ fieldName: trackedField, oldValue: null, newValue: 'v1' });
+
+    await call({
+      method: 'PUT',
+      url: `/api/issues/${issue.id}/fields/${trackedField}`,
+      payload: { value: 'v2' },
+    });
+    const afterSecond = await call({ method: 'GET', url: `/api/issues/${issue.id}/changelog` });
+    const secondLog = afterSecond.json().changeLog as ReadonlyArray<{
+      value: { oldValue: unknown; newValue: unknown };
+    }>;
+    expect(secondLog).toHaveLength(2);
+    // 新到舊：覆蓋寫入的這筆排最前，oldValue 帶上第一次寫入的值。
+    expect(secondLog[0]!.value).toMatchObject({ oldValue: 'v1', newValue: 'v2' });
+  });
+
   // ---- 異動歷史 ----
 
   it('列出工單異動歷史，依時間新到舊排序', async () => {

@@ -6,8 +6,8 @@ import type { Pool } from 'pg';
 import { currentIdentity } from '../../auth/middleware.js';
 import { withTransaction } from '../../db/client.js';
 import { containerRepo, fieldRepo, issueRepo } from '../../db/repositories/index.js';
-import { formatIssueKey } from '../../domain/index.js';
-import type { RollupMode } from '../../domain/index.js';
+import { formatIssueKey, recordFieldChange } from '../../domain/index.js';
+import type { FieldChangeInput, RollupMode } from '../../domain/index.js';
 import { isForeignKeyViolation, sendError } from '../errors.js';
 
 // 工單路由：工單的 CRUD、移動、依工單集列出，與工單欄位單值的讀寫。
@@ -251,22 +251,40 @@ export const issueRoutes: FastifyPluginAsync<IssueRoutesOptions> = async (
       },
     },
     async (request, reply) => {
-      const { companyId } = currentIdentity(request);
+      const { accountId, companyId } = currentIdentity(request);
       const issue = await issueRepo.getIssue(companyId, request.params.issueId, pool);
       if (issue === undefined) {
         return sendError(reply, 404, 'NOT_FOUND', '工單不存在');
       }
+      const { issueId, fieldName } = request.params;
       try {
-        const fieldValue = await issueRepo.setFieldValue(
-          {
-            companyId,
-            issueId: request.params.issueId,
-            fieldName: request.params.fieldName,
-            value: request.body.value,
-            rollupMode: request.body.rollupMode ?? null,
-          },
-          pool,
-        );
+        const fieldValue = await withTransaction(async (tx) => {
+          const existing = await issueRepo.getFieldValue(companyId, issueId, fieldName, tx);
+          const written = await issueRepo.setFieldValue(
+            {
+              companyId,
+              issueId,
+              fieldName,
+              value: request.body.value,
+              rollupMode: request.body.rollupMode ?? null,
+            },
+            tx,
+          );
+
+          const changes: FieldChangeInput[] = [
+            { fieldName, oldValue: existing?.value ?? null, newValue: request.body.value },
+          ];
+          const fieldDefs = await fieldRepo.listFieldDefs(companyId, tx);
+          const entries = recordFieldChange({ changes, actor: accountId, now: Date.now(), fieldDefs });
+          for (const entry of entries) {
+            await fieldRepo.appendChangeLog(
+              { id: randomUUID(), companyId, issueId, entry, authorId: accountId, createdOn: entry.time },
+              tx,
+            );
+          }
+
+          return written;
+        }, pool);
         return reply.status(200).send({ fieldValue });
       } catch (error: unknown) {
         if (isForeignKeyViolation(error)) {

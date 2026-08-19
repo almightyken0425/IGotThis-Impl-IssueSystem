@@ -186,7 +186,7 @@
     - DevOrderScreen 甘特圖座標轉換待做，需求為工單起訖日期換算時間軸格子、三層級同時載入，後端完全沒有，需另開獨立主題
 - **web_shell：**
     - 工單詳情頁已補（`IssueDetailScreen`）：欄位／關聯／異動歷史三區，List／Kanban／DevOrder 三處入口可導覽進入
-    - 工單詳情頁的欄位編輯範圍收斂在 workspace.ts `PATCH /api/workspace/issues/:issueId` 認得的 6 個白名單欄位（title/status/resolution/assignee/point/due）；其餘 `readonly=false` 但不在白名單內的欄位先唯讀顯示。後端 issues.ts 的泛用欄位寫入路徑已補上 `recordFieldChange`，前端解鎖待做，需先設計文字／長文／數字／日期／時間戳／選項／使用者／布林等值型別各自的輸入元件
+    - 工單詳情頁的欄位編輯已對齊 design 定案：非唯讀欄位一律可編輯，不分值型別。白名單四欄位 title/assignee/point/due 走 workspace.ts PATCH，其餘含自訂欄位走 issues.ts 泛用路徑，兩條都已記變更歷史
     - 型別維護與定義區管理介面待補
     - 登入頁在 design git 尚無定案畫面，目前以既有 token 就地組值頂著
     - 主題選擇未接持久化，`initialThemeId` 與 `onThemeChange` 待接，目前每次載入固定回 light

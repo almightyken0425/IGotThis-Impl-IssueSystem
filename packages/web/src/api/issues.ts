@@ -1,8 +1,8 @@
-// 工單 API · /api/issues 之下的單張工單讀取：基本識別、欄位單值、異動歷史
+// 工單 API · /api/issues 之下的單張工單讀取與泛用欄位寫入、異動歷史
 //
 // 供工單詳情頁使用。欄位單值的一般寫入（PUT /issues/:issueId/fields/:fieldName）
-// 刻意不在此封裝：該路徑不記變更歷史，本頁的欄位編輯改走 workspace.ts 既有的
-// PATCH（見 IssueDetailScreen 對編輯範圍的說明），此檔只承載讀取。
+// 已會記變更歷史，非白名單欄位（title/status/resolution/assignee/point/due
+// 以外）的編輯走這條；白名單欄位仍走 workspace.ts 既有的 PATCH。
 
 import { apiFetch } from './client';
 import type { ChangeLogEntry, IssueFieldValue, IssueSummary } from './types';
@@ -19,6 +19,19 @@ export async function listFieldValues(issueId: string): Promise<readonly IssueFi
     `/api/issues/${issueId}/fields`,
   );
   return res.fieldValues;
+}
+
+/** 寫入一張工單的單一泛用欄位值；status／resolution 受工單流程規則管制，走此路徑會被後端擋下。 */
+export async function updateFieldValue(
+  issueId: string,
+  fieldName: string,
+  value: unknown,
+): Promise<IssueFieldValue> {
+  const res = await apiFetch<{ fieldValue: IssueFieldValue }>(
+    `/api/issues/${issueId}/fields/${fieldName}`,
+    { method: 'PUT', body: { value } },
+  );
+  return res.fieldValue;
 }
 
 /**

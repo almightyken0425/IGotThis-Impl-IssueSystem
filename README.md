@@ -174,9 +174,9 @@
     - `rebuildFieldStateAt` 時點重建純函式已寫好，尚未掛進任何 API 或 repository，留給燃盡圖等自用深化波次需求時再補
 - **workflow_engine：**
     - 狀態、轉換、結案原因的定義層 CRUD 已完成
-    - 已接進建立型別的最小流程初始化
-    - 執行一次狀態轉換的邏輯待寫
-    - 轉換時的必填檢查待寫
+    - `validateStatusTransition`／`changeIssueStatus` 五項檢查皆已寫好且接進 workspace.ts：轉換合法性、角色、必填欄位、終止結案原因、結案原因合法性
+    - workspace.ts 的角色查詢已補真實資料，issues.ts 泛用欄位路徑已擋 status／resolution，不再能繞過轉換規則
+    - 目前沒有管理介面能建立帶 `requiredRole` 的轉換規則，歸在 web_shell 條目的型別維護與定義區管理介面待補範疇
 - **view_layer：**
     - 日曆選用套用待接
     - 工期天數呈現待接

@@ -9,6 +9,10 @@ import { containerRepo, fieldRepo, issueRepo } from '../../db/repositories/index
 import { formatIssueKey, recordFieldChange } from '../../domain/index.js';
 import type { FieldChangeInput, RollupMode } from '../../domain/index.js';
 import { isForeignKeyViolation, sendError } from '../errors.js';
+import {
+  WORKSPACE_FIELD_RESOLUTION as FIELD_RESOLUTION,
+  WORKSPACE_FIELD_STATUS as FIELD_STATUS,
+} from '../workspaceIssueRow.js';
 
 // 工單路由：工單的 CRUD、移動、依工單集列出，與工單欄位單值的讀寫。
 //
@@ -257,6 +261,14 @@ export const issueRoutes: FastifyPluginAsync<IssueRoutesOptions> = async (
         return sendError(reply, 404, 'NOT_FOUND', '工單不存在');
       }
       const { issueId, fieldName } = request.params;
+      if (fieldName === FIELD_STATUS || fieldName === FIELD_RESOLUTION) {
+        return sendError(
+          reply,
+          422,
+          'FIELD_REQUIRES_WORKFLOW_TRANSITION',
+          `${fieldName} 受工單流程規則管制，請走 PATCH /api/workspace/issues/:issueId`,
+        );
+      }
       try {
         const fieldValue = await withTransaction(async (tx) => {
           const existing = await issueRepo.getFieldValue(companyId, issueId, fieldName, tx);

@@ -228,6 +228,56 @@ suite('workspace routes', () => {
     expect(res.json().error.code).toBe('RESOLUTION_REQUIRES_STATUS_CHANGE');
   });
 
+  it('轉換要求角色時，帳號未掛角色回 422 ACTOR_ROLE_NOT_ALLOWED，掛上角色後轉換成功', async () => {
+    const created = (
+      await call({ method: 'POST', url: '/api/workspace/issues', payload: { title: 'A' } })
+    ).json().issue;
+    const issueTypeId = (await call({ method: 'GET', url: '/api/workspace' })).json().issueType.id;
+
+    // DEFAULT_TRANSITIONS 種子的四筆皆 requiredRole: null，直接改資料庫模擬有角色限制的轉換。
+    await pool.query(
+      `UPDATE workflow_transitions SET required_role = $1
+       WHERE company_id = $2 AND issue_type_id = $3 AND from_state = $4 AND to_state = $5`,
+      ['管理員', session.companyId, issueTypeId, '待處理', '處理中'],
+    );
+
+    const denied = await call({
+      method: 'PATCH',
+      url: `/api/workspace/issues/${created.id}`,
+      payload: { status: '處理中' },
+    });
+    expect(denied.statusCode).toBe(422);
+    expect(denied.json().error.code).toBe('ACTOR_ROLE_NOT_ALLOWED');
+
+    const now = Date.now();
+    const levelId = randomUUID();
+    const roleId = randomUUID();
+    await pool.query(
+      `INSERT INTO level_definitions
+         (id, company_id, name, system, can_read, can_comment, can_create, can_edit_own, can_edit_any, can_archive, can_structure, can_assign_role, created_on, updated_on)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)`,
+      [levelId, session.companyId, '管理員層級', false, true, true, true, true, true, true, true, true, now],
+    );
+    await pool.query(
+      `INSERT INTO roles (id, company_id, role_title, level_id, type_admin, org_admin, perm_admin, created_on, updated_on)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)`,
+      [roleId, session.companyId, '管理員', levelId, false, false, false, now],
+    );
+    await pool.query(
+      `INSERT INTO account_roles (id, company_id, account_id, role_id, created_on, updated_on)
+       VALUES ($1,$2,$3,$4,$5,$5)`,
+      [randomUUID(), session.companyId, session.accountId, roleId, now],
+    );
+
+    const allowed = await call({
+      method: 'PATCH',
+      url: `/api/workspace/issues/${created.id}`,
+      payload: { status: '處理中' },
+    });
+    expect(allowed.statusCode).toBe(200);
+    expect(allowed.json().issue.status).toBe('處理中');
+  });
+
   it('審查中可退回處理中', async () => {
     const created = (
       await call({ method: 'POST', url: '/api/workspace/issues', payload: { title: 'A' } })

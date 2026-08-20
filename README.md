@@ -190,4 +190,4 @@
     - 工單詳情頁的欄位編輯已對齊 design 定案：非唯讀欄位一律可編輯，不分值型別。白名單四欄位 title/assignee/point/due 走 workspace.ts PATCH，其餘含自訂欄位走 issues.ts 泛用路徑，兩條都已記變更歷史
     - 型別維護與定義區管理介面待補，同時卡住 StartTime／EndTime 兩個標準欄位的植入，連帶影響甘特圖長條能不能顯示
     - 登入頁在 design git 尚無定案畫面，目前以既有 token 就地組值頂著
-    - 主題選擇未接持久化，`initialThemeId` 與 `onThemeChange` 待接，目前每次載入固定回 light
+    - 主題選擇已接持久化，存瀏覽器 localStorage，不跟帳號走，換裝置需重新選一次

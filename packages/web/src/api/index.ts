@@ -9,6 +9,8 @@ export * as viewsApi from './views';
 export * as issuesApi from './issues';
 export * as fieldsApi from './fields';
 export * as relationsApi from './relations';
+export * as calendarsApi from './calendars';
+export * as accountsApi from './accounts';
 export type {
   Account,
   ChangeLogEntry,
@@ -33,6 +35,7 @@ export type {
   UpdateViewInput,
   View,
   ViewSortEntry,
+  WorkCalendar,
   WorkspaceContext,
   WorkspaceIssue,
   WorkspaceIssuesResult,

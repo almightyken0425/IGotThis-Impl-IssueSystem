@@ -11,6 +11,14 @@ export interface Account {
   readonly email: string;
 }
 
+/** 一份工作日曆。對齊 calendarRepo 的 WorkCalendar；前端只需要 name 給 Select 用，仍保留完整形狀對齊後端。 */
+export interface WorkCalendar {
+  readonly companyId: string;
+  readonly name: string;
+  readonly weeklyOff: readonly string[];
+  readonly exceptions: readonly { readonly date: string; readonly isWorking: boolean }[];
+}
+
 /** 公司。對齊 containerRepo 的 Company。 */
 export interface Company {
   readonly id: string;
@@ -106,11 +114,12 @@ export interface View {
   readonly calendarName: string | null;
 }
 
-/** 建立檢視的輸入：資料來源以組織範圍表示，展開由後端 expandDataSource 執行。 */
+/** 建立檢視的輸入：資料來源以組織範圍表示，展開由後端 expandDataSource 執行。calendarName 留空即跟隨帳號預設日曆。 */
 export interface CreateViewInput {
   readonly name: string;
   readonly scopeType: 'team' | 'product' | 'mgmt';
   readonly scopeId: string;
+  readonly calendarName?: string;
 }
 
 /** 更新檢視的輸入：帶到的欄位就寫、未帶不動，對齊後端 PATCH /api/views/:id 的 body 契約。 */

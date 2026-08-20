@@ -18,15 +18,17 @@
 //   不需要重複攔一次；DevOrderScreen 待接時比照辦理。
 // - DevOrderScreen 尚未改接當前檢視（仍呼叫 workspaceApi）——甘特圖需要的座標轉換
 //   （工單起訖日期換算時間軸格子、三層級同時載入）後端完全沒有，另開獨立主題處理。
-// - 新增檢視表單（AddViewForm）為 design 尚無定案的欄位細節，impl 補最小可用形。
+// - 新增檢視表單（AddViewForm）與帳號預設日曆選用比照 design add-view variant 定案。
 //
 // 主題切換：ThemeProvider 在更上層（App.tsx），本檔只提供切換入口。
 
 import { NavLink, Outlet } from 'react-router';
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
+import { accountsApi, calendarsApi } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
 import { Button, Select } from '../../components/controls';
+import { useAsync } from '../../hooks/useAsync';
 import {
   BORDER_WIDTH,
   CONTROL_HEIGHT,
@@ -179,6 +181,35 @@ function CurrentViewSection({ theme }: { readonly theme: Theme }) {
   );
 }
 
+/** 帳號預設日曆選用：個人偏好，選了立即持久化（對應 spec PermissionLogic / setDefaultCalendar）。 */
+function AccountCalendarSelect() {
+  const [defaultCalendar, setDefaultCalendar] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    void accountsApi.getMyDefaultCalendar().then((value) => setDefaultCalendar(value ?? undefined));
+  }, []);
+
+  const calendars = useAsync(useCallback(() => calendarsApi.listCalendars(), []));
+
+  const onChange = (value: string) => {
+    const previous = defaultCalendar;
+    setDefaultCalendar(value);
+    void accountsApi.updateMyDefaultCalendar(value).catch(() => setDefaultCalendar(previous));
+  };
+
+  return (
+    <Select
+      size="sm"
+      prefix="日曆"
+      placeholder="未設定"
+      options={calendars.data?.map((c) => ({ value: c.name, label: c.name })) ?? []}
+      {...(defaultCalendar !== undefined ? { value: defaultCalendar } : {})}
+      onChange={onChange}
+      fullWidth
+    />
+  );
+}
+
 function AppShellInner() {
   const { theme, themeId, toggleTheme } = useTheme();
   const { account, logout } = useAuth();
@@ -241,6 +272,7 @@ function AppShellInner() {
               {account.name}
             </span>
           )}
+          <AccountCalendarSelect />
           <Button
             variant="secondary"
             fullWidth

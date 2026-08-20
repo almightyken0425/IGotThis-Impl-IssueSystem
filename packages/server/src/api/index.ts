@@ -7,6 +7,7 @@ import { makeRequireAuth } from '../auth/middleware.js';
 import { defaultAuthDeps, type AuthDeps } from '../auth/service.js';
 import { getPool } from '../db/index.js';
 import { errorBody, sendError } from './errors.js';
+import { accountRoutes } from './routes/accounts.js';
 import { authRoutes } from './routes/auth.js';
 import { calendarRoutes } from './routes/calendars.js';
 import { containerRoutes } from './routes/containers.js';
@@ -86,6 +87,9 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
   });
   void app.register((instance) => calendarRoutes(instance, { pool, requireAuth }), {
     prefix: '/api/calendars',
+  });
+  void app.register((instance) => accountRoutes(instance, { pool, requireAuth }), {
+    prefix: '/api/accounts',
   });
 
   // 關聯、欄位定義、檢視路由，各掛自身前綴下，全數帶認證與租戶範圍。

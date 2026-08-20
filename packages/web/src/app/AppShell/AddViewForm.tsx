@@ -1,12 +1,12 @@
 // AddViewForm · 新增檢視的行內表單
 //
-// design（no4_app_shell.jsx）只定案一顆「新增檢視」Button，欄位細節尚無定案；
-// impl 補最小可用形：檢視名稱 + Team→Product→Mgmt 串接式選擇，選到哪層就是哪層
-// 的資料來源範圍（對應 spec ViewLogic / expandDataSource 的組織範圍輸入）。
+// design（no4_app_shell.jsx add-view variant）定案：檢視名稱 + Team→Product→Mgmt
+// 串接式選擇（對應 spec ViewLogic / expandDataSource 的組織範圍輸入）+ 日曆選用。
+// 日曆選用留白即跟隨帳號預設日曆（spec ViewLogic / resolveViewCalendar）。
 
 import { useCallback, useState } from 'react';
 
-import { ApiError, containersApi } from '../../api';
+import { ApiError, calendarsApi, containersApi } from '../../api';
 import { Button, Select, TextInput } from '../../components/controls';
 import { SPACING } from '../../theme';
 import { useAsync } from '../../hooks/useAsync';
@@ -23,6 +23,7 @@ export function AddViewForm({ onCancel, onCreated }: AddViewFormProps) {
   const [teamId, setTeamId] = useState<string | undefined>(undefined);
   const [productId, setProductId] = useState<string | undefined>(undefined);
   const [mgmtId, setMgmtId] = useState<string | undefined>(undefined);
+  const [calendarName, setCalendarName] = useState<string | undefined>(undefined);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
 
@@ -40,6 +41,7 @@ export function AddViewForm({ onCancel, onCreated }: AddViewFormProps) {
       [productId],
     ),
   );
+  const calendars = useAsync(useCallback(() => calendarsApi.listCalendars(), []));
 
   // 換上層選擇時，下層選擇失效——比照容器樹「僅屬一個上層」的嚴格歸屬。
   const onTeamChange = (id: string) => {
@@ -68,7 +70,11 @@ export function AddViewForm({ onCancel, onCreated }: AddViewFormProps) {
     setSubmitting(true);
     setError(undefined);
     try {
-      await addView({ name: name.trim(), ...scope });
+      await addView({
+        name: name.trim(),
+        ...scope,
+        ...(calendarName !== undefined ? { calendarName } : {}),
+      });
       onCreated();
     } catch (err: unknown) {
       setError(err instanceof ApiError ? err.message : '建立檢視失敗');
@@ -86,6 +92,7 @@ export function AddViewForm({ onCancel, onCreated }: AddViewFormProps) {
         options={(teams.data ?? []).map((t) => ({ value: t.id, label: t.name }))}
         {...(teamId !== undefined ? { value: teamId } : {})}
         onChange={onTeamChange}
+        fullWidth
       />
       <Select
         prefix="Product"
@@ -96,6 +103,7 @@ export function AddViewForm({ onCancel, onCreated }: AddViewFormProps) {
         // 也擋 loading：Team 剛切換、新清單還沒抓回來前，products.data 仍是舊 Team 的
         // 舊清單，不擋會讓使用者點到跟畫面顯示的 Team 對不上的 Product。
         disabled={teamId === undefined || products.loading}
+        fullWidth
       />
       <Select
         prefix="Mgmt"
@@ -104,6 +112,16 @@ export function AddViewForm({ onCancel, onCreated }: AddViewFormProps) {
         {...(mgmtId !== undefined ? { value: mgmtId } : {})}
         onChange={setMgmtId}
         disabled={productId === undefined || mgmts.loading}
+        fullWidth
+      />
+      <Select
+        prefix="日曆"
+        size="sm"
+        placeholder="跟隨帳號預設"
+        options={calendars.data?.map((c) => ({ value: c.name, label: c.name })) ?? []}
+        {...(calendarName !== undefined ? { value: calendarName } : {})}
+        onChange={setCalendarName}
+        fullWidth
       />
       {error !== undefined && <span role="alert">{error}</span>}
       <div style={{ display: 'flex', gap: SPACING.xs }}>

@@ -20,6 +20,7 @@ import {
   listAccountRoles,
   listRateHistories,
   listRoleScopes,
+  updateAccountDefaultCalendar,
   type LevelDefinition,
   type Role,
 } from './permissionRepo.js';
@@ -121,6 +122,19 @@ suite('permissionRepo / 整合', () => {
         createdOn: 100,
         updatedOn: 200,
       });
+    });
+  });
+
+  it('updateAccountDefaultCalendar：改預設日曆後 getAccount 讀到新值，可設回 null', async () => {
+    await withRollback(pool, async (client) => {
+      const companyId = await seedCompany(client);
+      const id = await seedAccount(client, companyId, '小華');
+
+      await updateAccountDefaultCalendar(client, companyId, id, '台灣');
+      expect((await getAccount(client, companyId, id))?.defaultCalendarName).toBe('台灣');
+
+      await updateAccountDefaultCalendar(client, companyId, id, null);
+      expect((await getAccount(client, companyId, id))?.defaultCalendarName).toBeNull();
     });
   });
 

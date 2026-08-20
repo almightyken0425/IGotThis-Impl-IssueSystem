@@ -45,6 +45,8 @@ export interface SelectProps {
   readonly onChange?: (value: string) => void;
   readonly size?: SelectSize;
   readonly disabled?: boolean;
+  /** 撐滿容器寬度；窄欄表單直向堆疊多個 Select 時用，比照 Button / TextInput 同名 prop。 */
+  readonly fullWidth?: boolean;
   readonly style?: CSSProperties;
 }
 
@@ -56,6 +58,7 @@ export function Select({
   onChange,
   size = 'md',
   disabled = false,
+  fullWidth = false,
   style,
 }: SelectProps) {
   const { theme } = useTheme();
@@ -94,7 +97,15 @@ export function Select({
       : theme.border.input;
 
   return (
-    <div ref={wrapRef} style={{ position: 'relative', display: 'inline-flex', ...style }}>
+    <div
+      ref={wrapRef}
+      style={{
+        position: 'relative',
+        display: 'inline-flex',
+        width: fullWidth ? '100%' : undefined,
+        ...style,
+      }}
+    >
       <button
         type="button"
         onClick={() => {
@@ -111,6 +122,7 @@ export function Select({
           alignItems: 'center',
           gap: SELECT_TOKENS.GAP,
           height: SELECT_TOKENS.HEIGHT[size],
+          width: fullWidth ? '100%' : undefined,
           padding: `0 ${SELECT_TOKENS.PADDING_RIGHT}px 0 ${SELECT_TOKENS.PADDING_LEFT}px`,
           position: 'relative',
           borderRadius: SELECT_TOKENS.RADIUS,
@@ -166,6 +178,7 @@ export function Select({
             left: 0,
             zIndex: MENU_Z_INDEX,
             marginTop: SELECT_TOKENS.MENU.OFFSET,
+            width: fullWidth ? '100%' : undefined,
             minWidth: SELECT_TOKENS.MENU.MIN_WIDTH,
             maxHeight: SELECT_TOKENS.MENU.MAX_HEIGHT,
             overflowY: 'auto',

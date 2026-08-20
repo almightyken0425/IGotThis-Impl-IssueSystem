@@ -273,6 +273,19 @@ export async function listAccounts(exec: Executor, companyId: string): Promise<A
   return result.rows.map(rowToAccount);
 }
 
+/** 更新帳號的預設日曆，對應 spec PermissionLogic / setDefaultCalendar。 */
+export async function updateAccountDefaultCalendar(
+  exec: Executor,
+  companyId: string,
+  id: string,
+  defaultCalendarName: string | null,
+): Promise<void> {
+  await exec.query(
+    `UPDATE accounts SET default_calendar_name = $3 WHERE company_id = $1 AND id = $2`,
+    [companyId, id, defaultCalendarName],
+  );
+}
+
 // ============================================================
 // LevelDefinitions
 // ============================================================

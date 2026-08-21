@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "IGotThis 單體伺服器：API、認證、資料存取與 domain 純邏輯",
-  "license": "UNLICENSED",
+  "license": "SEE LICENSE IN LICENSE",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",

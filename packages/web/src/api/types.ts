@@ -224,6 +224,24 @@ export interface FieldDef {
   readonly label: string;
 }
 
+/** 欄位組定義。對齊 fieldRepo 的 FieldSetDef。供 TypeDefinitionScreen 使用。 */
+export interface FieldSetDef {
+  readonly companyId: string;
+  readonly name: string;
+  /** 為真代表系統內建，不可刪除。 */
+  readonly system: boolean;
+}
+
+/** 工單型別定義。對齊 issueRepo 的 IssueTypeDefinition。供 TypeDefinitionScreen 使用。 */
+export interface IssueTypeDefinition {
+  readonly id: string;
+  readonly companyId: string;
+  readonly name: string;
+  readonly label: string;
+  readonly fieldSets: readonly string[];
+  readonly system: boolean;
+}
+
 /** 工單單一欄位值。對齊 issueRepo 的 StoredFieldValue。 */
 export interface IssueFieldValue {
   readonly companyId: string;

@@ -126,6 +126,20 @@ export async function listFieldSets(
   return rows.map(toFieldSetDef);
 }
 
+/** 刪除一筆欄位組定義，限同 Company；回傳是否真的刪到一列。 */
+export async function deleteFieldSet(
+  companyId: string,
+  name: string,
+  exec: Executor = getPool(),
+): Promise<boolean> {
+  const rows = await run<{ name: string }>(
+    exec,
+    'DELETE FROM field_set_defs WHERE company_id = $1 AND name = $2 RETURNING name',
+    [companyId, name],
+  );
+  return rows.length > 0;
+}
+
 // ============================================================
 // 欄位定義：讀寫
 // ============================================================
@@ -200,6 +214,35 @@ export async function listFieldDefsBySet(
     [companyId, fieldSetName],
   );
   return rows.map(toFieldDef);
+}
+
+/** 改欄位定義的顯示名稱，限同 Company；其餘欄位不動。查無回 undefined。 */
+export async function updateFieldLabel(
+  companyId: string,
+  name: string,
+  label: string,
+  exec: Executor = getPool(),
+): Promise<FieldDef | undefined> {
+  const row = await runOne<FieldDefRow>(
+    exec,
+    'UPDATE field_defs SET label = $3 WHERE company_id = $1 AND name = $2 RETURNING *',
+    [companyId, name, label],
+  );
+  return row ? toFieldDef(row) : undefined;
+}
+
+/** 刪除一筆欄位定義，限同 Company；回傳是否真的刪到一列。 */
+export async function deleteFieldDef(
+  companyId: string,
+  name: string,
+  exec: Executor = getPool(),
+): Promise<boolean> {
+  const rows = await run<{ name: string }>(
+    exec,
+    'DELETE FROM field_defs WHERE company_id = $1 AND name = $2 RETURNING name',
+    [companyId, name],
+  );
+  return rows.length > 0;
 }
 
 // ============================================================

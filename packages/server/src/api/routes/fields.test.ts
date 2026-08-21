@@ -61,6 +61,30 @@ suite('field routes', () => {
     expect(again.json().error.code).toBe('FIELD_SET_NAME_TAKEN');
   });
 
+  it('刪除欄位組：查無回 404，成功回 204 且列表不再出現', async () => {
+    const missing = await call({ method: 'DELETE', url: '/api/fields/sets/不存在' });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json().error.code).toBe('FIELD_SET_NOT_FOUND');
+
+    await createSet('專案');
+    const res = await call({ method: 'DELETE', url: '/api/fields/sets/專案' });
+    expect(res.statusCode).toBe(204);
+    const list = await call({ method: 'GET', url: '/api/fields/sets' });
+    expect(list.json().fieldSets).toHaveLength(0);
+  });
+
+  it('刪除底下還有欄位的欄位組回 409', async () => {
+    await createSet('基本');
+    await call({
+      method: 'POST',
+      url: '/api/fields/defs',
+      payload: { name: 'Title', fieldSetName: '基本', kind: 'single', valueType: 'text', label: '標題' },
+    });
+    const res = await call({ method: 'DELETE', url: '/api/fields/sets/基本' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.code).toBe('FIELD_SET_NOT_EMPTY');
+  });
+
   // ---- 欄位定義 ----
 
   it('建立欄位定義回 201', async () => {
@@ -165,5 +189,44 @@ suite('field routes', () => {
 
     const gone = await call({ method: 'GET', url: '/api/fields/defs/Missing' });
     expect(gone.statusCode).toBe(404);
+  });
+
+  it('改欄位定義顯示名稱回 200；查無回 404', async () => {
+    await createSet('基本');
+    await call({
+      method: 'POST',
+      url: '/api/fields/defs',
+      payload: { name: 'Title', fieldSetName: '基本', kind: 'single', valueType: 'text', label: '標題' },
+    });
+    const res = await call({
+      method: 'PATCH',
+      url: '/api/fields/defs/Title',
+      payload: { label: '主旨' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().fieldDef.label).toBe('主旨');
+
+    const missing = await call({
+      method: 'PATCH',
+      url: '/api/fields/defs/Missing',
+      payload: { label: 'X' },
+    });
+    expect(missing.statusCode).toBe(404);
+  });
+
+  it('刪除欄位定義：查無回 404，成功回 204', async () => {
+    await createSet('基本');
+    await call({
+      method: 'POST',
+      url: '/api/fields/defs',
+      payload: { name: 'Title', fieldSetName: '基本', kind: 'single', valueType: 'text', label: '標題' },
+    });
+    const res = await call({ method: 'DELETE', url: '/api/fields/defs/Title' });
+    expect(res.statusCode).toBe(204);
+    const gone = await call({ method: 'GET', url: '/api/fields/defs/Title' });
+    expect(gone.statusCode).toBe(404);
+
+    const missing = await call({ method: 'DELETE', url: '/api/fields/defs/Missing' });
+    expect(missing.statusCode).toBe(404);
   });
 });

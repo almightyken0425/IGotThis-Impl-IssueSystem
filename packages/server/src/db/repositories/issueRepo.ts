@@ -448,6 +448,89 @@ export async function replaceResolutionOptions(
 }
 
 // ============================================================
+// 型別流程初始化
+// ============================================================
+
+/** 流程狀態：順序即 sortOrder，第一個為初始、最後一個為終止。 */
+const DEFAULT_STATES = ['待處理', '處理中', '審查中', '已完成'] as const;
+
+/**
+ * 預設流程轉換：待處理→處理中→審查中→已完成的正向鏈，加審查中→處理中的退回路徑。
+ * 沒有退回路徑，審查不過的工單會卡死無路可走。不開放其他跳躍——待處理直接到
+ * 已完成正是要拆掉的舊行為。四條轉換皆不限角色、無額外必填欄位，不預先發明
+ * 沒人要求的限制；終止狀態須提供結案原因由 validateStatusTransition 統一把關。
+ */
+const DEFAULT_TRANSITIONS: readonly WorkflowTransitionInput[] = [
+  { fromState: '待處理', toState: '處理中', requiredRole: null, requiredFields: [] },
+  { fromState: '處理中', toState: '審查中', requiredRole: null, requiredFields: [] },
+  { fromState: '審查中', toState: '已完成', requiredRole: null, requiredFields: [] },
+  { fromState: '審查中', toState: '處理中', requiredRole: null, requiredFields: [] },
+];
+
+/** 沿用 spec 標準結案原因（no7_issue_model.md 的 StandardResolutionOptions）。 */
+const DEFAULT_RESOLUTIONS: readonly string[] = ['已完成', '不做'];
+
+export interface TypeWorkflowResult {
+  readonly states: readonly WorkflowState[];
+  readonly transitions: readonly WorkflowTransition[];
+  readonly resolutionOptions: readonly ResolutionOption[];
+}
+
+/**
+ * 初始化一個工單型別的流程定義：帶複製來源時全份複製，否則帶入預設最小流程。
+ * 對應 Spec：WorkflowLogic 的 initializeTypeWorkflow。三張表同交易內清空重建，
+ * `exec` 須為交易中的連線（轉換對狀態有外鍵，見 replaceWorkflowTransitions）。
+ *
+ * 預設結案原因統一落 system=false：目前沒有任何畫面依此欄位分流結案原因的
+ * 編輯權限，不論走預設或複製都不代入使用者無法理解的差異狀態。
+ */
+export async function initializeTypeWorkflow(
+  companyId: string,
+  issueTypeId: string,
+  sourceTypeId: string | undefined,
+  exec: Executor,
+): Promise<TypeWorkflowResult> {
+  let stateInputs: readonly WorkflowStateInput[];
+  let transitionInputs: readonly WorkflowTransitionInput[];
+  let resolutionInputs: readonly ResolutionOptionInput[];
+
+  if (sourceTypeId !== undefined) {
+    const [sourceStates, sourceTransitions, sourceResolutions] = await Promise.all([
+      listWorkflowStates(companyId, sourceTypeId, exec),
+      listWorkflowTransitions(companyId, sourceTypeId, exec),
+      listResolutionOptions(companyId, sourceTypeId, exec),
+    ]);
+    stateInputs = sourceStates.map(({ name, sortOrder, isInitial, isTerminal }) => ({
+      name,
+      sortOrder,
+      isInitial,
+      isTerminal,
+    }));
+    transitionInputs = sourceTransitions.map(({ fromState, toState, requiredRole, requiredFields }) => ({
+      fromState,
+      toState,
+      requiredRole,
+      requiredFields,
+    }));
+    resolutionInputs = sourceResolutions.map(({ value, system }) => ({ value, system }));
+  } else {
+    stateInputs = DEFAULT_STATES.map((name, index) => ({
+      name,
+      sortOrder: index,
+      isInitial: index === 0,
+      isTerminal: index === DEFAULT_STATES.length - 1,
+    }));
+    transitionInputs = DEFAULT_TRANSITIONS;
+    resolutionInputs = DEFAULT_RESOLUTIONS.map((value) => ({ value, system: false }));
+  }
+
+  const states = await replaceWorkflowStates(companyId, issueTypeId, stateInputs, exec);
+  const transitions = await replaceWorkflowTransitions(companyId, issueTypeId, transitionInputs, exec);
+  const resolutionOptions = await replaceResolutionOptions(companyId, issueTypeId, resolutionInputs, exec);
+  return { states, transitions, resolutionOptions };
+}
+
+// ============================================================
 // 工單欄位單值 (IssueFieldValues)
 // ============================================================
 

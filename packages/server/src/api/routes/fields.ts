@@ -5,7 +5,7 @@ import { currentIdentity } from '../../auth/middleware.js';
 import { fieldRepo } from '../../db/repositories/index.js';
 import type { FieldDef, FieldKind, FieldSetDef } from '../../db/repositories/index.js';
 import type { RollupFn } from '../../domain/index.js';
-import { sendError } from '../errors.js';
+import { isForeignKeyViolation, sendError } from '../errors.js';
 
 // 欄位路由：/api/fields 之下的欄位組定義與欄位定義的讀寫。
 //
@@ -62,8 +62,19 @@ const fieldDefQuerySchema = {
   properties: { fieldSetName: { type: 'string', minLength: 1 } },
 } as const;
 
+const fieldLabelBodySchema = {
+  type: 'object',
+  required: ['label'],
+  additionalProperties: false,
+  properties: { label: { type: 'string', minLength: 1, maxLength: 200 } },
+} as const;
+
 interface FieldSetBody {
   readonly name: string;
+}
+
+interface FieldLabelBody {
+  readonly label: string;
 }
 
 interface FieldDefBody {
@@ -110,6 +121,28 @@ export const fieldRoutes: FastifyPluginAsync<FieldRoutesOptions> = async (
     const fieldSets = await fieldRepo.listFieldSets(companyId, pool);
     return reply.status(200).send({ fieldSets });
   });
+
+  // 刪除欄位組；系統內建不可刪，還有欄位掛在底下也不可刪。
+  app.delete<{ Params: { name: string } }>(
+    '/sets/:name',
+    { schema: { params: nameParamsSchema } },
+    async (request, reply) => {
+      const { companyId } = currentIdentity(request);
+      const existing = await fieldRepo.findFieldSet(companyId, request.params.name, pool);
+      if (existing === undefined) {
+        return sendError(reply, 404, 'FIELD_SET_NOT_FOUND', '欄位組不存在');
+      }
+      if (existing.system) {
+        return sendError(reply, 403, 'FIELD_SET_IS_SYSTEM', '系統內建欄位組不可刪除');
+      }
+      const fields = await fieldRepo.listFieldDefsBySet(companyId, request.params.name, pool);
+      if (fields.length > 0) {
+        return sendError(reply, 409, 'FIELD_SET_NOT_EMPTY', '欄位組底下還有欄位，須先刪除或搬移');
+      }
+      await fieldRepo.deleteFieldSet(companyId, request.params.name, pool);
+      return reply.status(204).send();
+    },
+  );
 
   // ---- 欄位定義 ----
 
@@ -175,6 +208,49 @@ export const fieldRoutes: FastifyPluginAsync<FieldRoutesOptions> = async (
         return sendError(reply, 404, 'FIELD_NOT_FOUND', '欄位定義不存在');
       }
       return reply.status(200).send({ fieldDef: def });
+    },
+  );
+
+  // 改欄位定義的顯示名稱；系統內建不可改。
+  app.patch<{ Params: { name: string }; Body: FieldLabelBody }>(
+    '/defs/:name',
+    { schema: { params: nameParamsSchema, body: fieldLabelBodySchema } },
+    async (request, reply) => {
+      const { companyId } = currentIdentity(request);
+      const existing = await fieldRepo.findFieldDef(companyId, request.params.name, pool);
+      if (existing === undefined) {
+        return sendError(reply, 404, 'FIELD_NOT_FOUND', '欄位定義不存在');
+      }
+      if (existing.system) {
+        return sendError(reply, 403, 'FIELD_IS_SYSTEM', '系統內建欄位不可編輯');
+      }
+      const updated = await fieldRepo.updateFieldLabel(companyId, request.params.name, request.body.label, pool);
+      return reply.status(200).send({ fieldDef: updated });
+    },
+  );
+
+  // 刪除欄位定義；系統內建不可刪；已有欄位值時外鍵會擋，轉乾淨的 409。
+  app.delete<{ Params: { name: string } }>(
+    '/defs/:name',
+    { schema: { params: nameParamsSchema } },
+    async (request, reply) => {
+      const { companyId } = currentIdentity(request);
+      const existing = await fieldRepo.findFieldDef(companyId, request.params.name, pool);
+      if (existing === undefined) {
+        return sendError(reply, 404, 'FIELD_NOT_FOUND', '欄位定義不存在');
+      }
+      if (existing.system) {
+        return sendError(reply, 403, 'FIELD_IS_SYSTEM', '系統內建欄位不可刪除');
+      }
+      try {
+        await fieldRepo.deleteFieldDef(companyId, request.params.name, pool);
+      } catch (error: unknown) {
+        if (isForeignKeyViolation(error)) {
+          return sendError(reply, 409, 'FIELD_IN_USE', '欄位已有工單資料，不可刪除');
+        }
+        throw error;
+      }
+      return reply.status(204).send();
     },
   );
 };

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "IGotThis 桌面瀏覽器前端，建置產物交由單體伺服器靜態託管",
-  "license": "UNLICENSED",
+  "license": "SEE LICENSE IN LICENSE",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

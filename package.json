@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "IGotThis issue system monorepo root",
-  "license": "UNLICENSED",
+  "license": "SEE LICENSE IN LICENSE",
   "engines": {
     "node": ">=22"
   },

@@ -2,8 +2,8 @@
 
 - 多產品開發團隊的 web 工單系統，開源自架免費，授權條款見 `LICENSE`
 - 本 repo 為 Module Impl git，module_id 為 `no1_issue_system`
-- 已完成地基層與多數引擎層，應用層局部完成
-- changelog_engine 與 workflow_engine 只有儲存與定義層，執行邏輯待補
+- 已完成地基層、引擎層、型別定義管理，應用層局部完成
+- workflow_engine 的流程編輯（updateWorkflowDefinition）尚無畫面消費，未實作
 - 行為規格的仲裁端為對側 Module Spec git，視覺標準的仲裁端為對側 Module Design git
 
 ---

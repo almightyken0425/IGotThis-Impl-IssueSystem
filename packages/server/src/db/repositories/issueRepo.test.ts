@@ -182,6 +182,50 @@ suite('issueRepo / 整合', () => {
     });
   });
 
+  // ---------- initializeTypeWorkflow ----------
+
+  it('initializeTypeWorkflow：無來源時帶入預設四狀態流程與結案原因', async () => {
+    await withRollback(pool, async (tx) => {
+      const f = await seedTenant(tx);
+      const result = await issueRepo.initializeTypeWorkflow(f.companyId, f.issueTypeId, undefined, tx);
+
+      expect(result.states.map((s) => s.name)).toEqual(['待處理', '處理中', '審查中', '已完成']);
+      expect(result.states.find((s) => s.isInitial)?.name).toBe('待處理');
+      expect(result.states.find((s) => s.isTerminal)?.name).toBe('已完成');
+      expect(result.transitions).toHaveLength(4);
+      expect(new Set(result.resolutionOptions.map((o) => o.value))).toEqual(new Set(['已完成', '不做']));
+      expect(result.resolutionOptions.every((o) => !o.system)).toBe(true);
+    });
+  });
+
+  it('initializeTypeWorkflow：帶來源時全份複製既有型別的流程，複製結果與來源各自獨立', async () => {
+    await withRollback(pool, async (tx) => {
+      const f = await seedTenant(tx);
+      await issueRepo.initializeTypeWorkflow(f.companyId, f.issueTypeId, undefined, tx);
+
+      const newTypeId = randomUUID();
+      await issueRepo.createIssueType(
+        { id: newTypeId, companyId: f.companyId, name: 'bug', label: 'Bug', fieldSets: ['基本'], system: false },
+        tx,
+      );
+      const copied = await issueRepo.initializeTypeWorkflow(f.companyId, newTypeId, f.issueTypeId, tx);
+
+      expect(copied.states.map((s) => s.name)).toEqual(['待處理', '處理中', '審查中', '已完成']);
+      expect(copied.transitions).toHaveLength(4);
+      expect(new Set(copied.resolutionOptions.map((o) => o.value))).toEqual(new Set(['已完成', '不做']));
+
+      // 複製後互相獨立：改來源不動複製結果。
+      await issueRepo.replaceWorkflowStates(
+        f.companyId,
+        f.issueTypeId,
+        [{ name: '單一', sortOrder: 1, isInitial: true, isTerminal: true }],
+        tx,
+      );
+      const copiedStates = await issueRepo.listWorkflowStates(f.companyId, newTypeId, tx);
+      expect(copiedStates).toHaveLength(4);
+    });
+  });
+
   // ---------- 工單欄位值 ----------
 
   it('工單欄位值：設定、覆蓋、讀取、刪除', async () => {

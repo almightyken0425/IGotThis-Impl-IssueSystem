@@ -8,6 +8,7 @@ export * as containersApi from './containers';
 export * as viewsApi from './views';
 export * as issuesApi from './issues';
 export * as fieldsApi from './fields';
+export * as issueTypesApi from './issueTypes';
 export * as relationsApi from './relations';
 export * as calendarsApi from './calendars';
 export * as accountsApi from './accounts';
@@ -20,12 +21,14 @@ export type {
   DevOrderIssuesResult,
   DevOrderLevelGroup,
   FieldDef,
+  FieldSetDef,
   GanttBarSpan,
   GanttDay,
   IssueDuration,
   IssueFieldValue,
   IssueRelation,
   IssueSummary,
+  IssueTypeDefinition,
   Mgmt,
   Product,
   RelationTypeDefinition,

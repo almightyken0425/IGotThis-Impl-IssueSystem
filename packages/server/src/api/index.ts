@@ -13,6 +13,7 @@ import { calendarRoutes } from './routes/calendars.js';
 import { containerRoutes } from './routes/containers.js';
 import { fieldRoutes } from './routes/fields.js';
 import { issueRoutes } from './routes/issues.js';
+import { issueTypeRoutes } from './routes/issueTypes.js';
 import { permissionRoutes } from './routes/permissions.js';
 import { relationRoutes } from './routes/relations.js';
 import { viewRoutes } from './routes/views.js';
@@ -98,6 +99,9 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
   });
   void app.register((instance) => fieldRoutes(instance, { pool, requireAuth }), {
     prefix: '/api/fields',
+  });
+  void app.register((instance) => issueTypeRoutes(instance, { pool, requireAuth }), {
+    prefix: '/api/issue-types',
   });
   void app.register((instance) => viewRoutes(instance, { pool, requireAuth }), {
     prefix: '/api/views',

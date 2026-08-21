@@ -1,4 +1,4 @@
-// 路由表 · 三個畫面各一條
+// 路由表 · 四個畫面各一條
 //
 // 單一真相：NAV_ITEMS 同時餵路由與側邊導覽列，兩處不各自維護一份清單。
 // 加畫面就在 NAV_ITEMS 補一筆，導覽列自動長出對應項。
@@ -14,6 +14,7 @@ import { IssueDetailScreen } from '../screens/IssueDetailScreen';
 import { KanbanScreen } from '../screens/KanbanScreen';
 import { ListScreen } from '../screens/ListScreen';
 import { LoginScreen } from '../screens/LoginScreen';
+import { TypeDefinitionScreen } from '../screens/TypeDefinitionScreen';
 import { AppShell } from './AppShell';
 
 export interface NavItem {
@@ -25,6 +26,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { path: '/list', label: '工單清單' },
   { path: '/kanban', label: '工單看板' },
   { path: '/dev-order', label: '開發順序表' },
+  { path: '/types', label: '型別管理' },
 ];
 
 const DEFAULT_PATH = '/list';
@@ -44,6 +46,7 @@ export const router = createBrowserRouter([
           { path: 'list', element: <ListScreen /> },
           { path: 'kanban', element: <KanbanScreen /> },
           { path: 'dev-order', element: <DevOrderScreen /> },
+          { path: 'types', element: <TypeDefinitionScreen /> },
           // 工單詳情頁：List/Kanban/DevOrder 三畫面點擊工單導覽至此，不掛側邊導覽列
           // （不進 NAV_ITEMS）——這是三畫面的下鑽頁，不是頂層導覽目的地。
           { path: 'issues/:issueId', element: <IssueDetailScreen /> },

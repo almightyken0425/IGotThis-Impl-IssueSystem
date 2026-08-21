@@ -12,9 +12,7 @@ import type {
   IssueSet,
   IssueTypeDefinition,
   LevelDefinition,
-  ResolutionOptionInput,
   Role,
-  WorkflowTransitionInput,
 } from '../../db/repositories/index.js';
 import type { Executor } from '../../db/repositories/index.js';
 import { changeIssueStatus, formatIssueKey, invalid, recordFieldChange } from '../../domain/index.js';
@@ -66,25 +64,12 @@ const DEFAULT_PRODUCT_NAME = '預設產品';
 const DEFAULT_MGMT_NAME = '預設管理域';
 const DEFAULT_ISSUE_SET_NAME = '預設工單集';
 
-/** 流程狀態：順序即 sortOrder，第一個為初始、最後一個為終止。 */
-const DEFAULT_STATES = ['待處理', '處理中', '審查中', '已完成'] as const;
-const DEFAULT_STATUS = DEFAULT_STATES[0];
-
 /**
- * 預設流程轉換：待處理→處理中→審查中→已完成的正向鏈，加審查中→處理中的退回路徑。
- * 沒有退回路徑，審查不過的工單會卡死無路可走。不開放其他跳躍——待處理直接到
- * 已完成正是要拆掉的舊行為。四條轉換皆不限角色、無額外必填欄位，不預先發明
- * 沒人要求的限制；終止狀態須提供結案原因由 validateStatusTransition 統一把關。
+ * 開機種子的初始狀態名稱；實際流程定義（含四狀態與退回路徑的完整理由）
+ * 移到 issueRepo.initializeTypeWorkflow 的 DEFAULT_STATES/DEFAULT_TRANSITIONS，
+ * 供本檔的開機種子與 issueTypes 路由的一般建立共用，不各寫一份。
  */
-const DEFAULT_TRANSITIONS: readonly WorkflowTransitionInput[] = [
-  { fromState: '待處理', toState: '處理中', requiredRole: null, requiredFields: [] },
-  { fromState: '處理中', toState: '審查中', requiredRole: null, requiredFields: [] },
-  { fromState: '審查中', toState: '已完成', requiredRole: null, requiredFields: [] },
-  { fromState: '審查中', toState: '處理中', requiredRole: null, requiredFields: [] },
-];
-
-/** 沿用 spec 標準結案原因（no7_issue_model.md 的 StandardResolutionOptions）。 */
-const DEFAULT_RESOLUTIONS: readonly string[] = ['已完成', '不做'];
+const DEFAULT_STATUS = '待處理';
 
 /** 預設管理 Role 的標題；Roles 沒有 StandardRoles 這類 spec 資產，屬 impl 自訂命名，
  *  同時作為「本 Company 是否已啟動過權限種子」的判準（見 ensurePermissionBootstrap）。 */
@@ -216,24 +201,9 @@ async function ensureIssueType(
     tx,
   );
 
-  await issueRepo.replaceWorkflowStates(
-    companyId,
-    issueType.id,
-    DEFAULT_STATES.map((name, index) => ({
-      name,
-      sortOrder: index,
-      isInitial: index === 0,
-      isTerminal: index === DEFAULT_STATES.length - 1,
-    })),
-    tx,
-  );
-  await issueRepo.replaceWorkflowTransitions(companyId, issueType.id, DEFAULT_TRANSITIONS, tx);
-  await issueRepo.replaceResolutionOptions(
-    companyId,
-    issueType.id,
-    DEFAULT_RESOLUTIONS.map((value): ResolutionOptionInput => ({ value, system: true })),
-    tx,
-  );
+  // 預設流程（四狀態、退回路徑、結案原因）由 initializeTypeWorkflow 帶入，
+  // 與 issueTypes 路由的一般建立共用同一份預設值，不各寫一份。
+  await issueRepo.initializeTypeWorkflow(companyId, issueType.id, undefined, tx);
 
   return issueType;
 }

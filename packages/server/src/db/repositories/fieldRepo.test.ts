@@ -6,7 +6,9 @@ import {
   appendChangeLog,
   appendFieldRecord,
   CHANGE_LOG_FIELD_NAME,
+  deleteFieldDef,
   deleteFieldRecord,
+  deleteFieldSet,
   findFieldDef,
   findFieldRecordById,
   findFieldSet,
@@ -17,6 +19,7 @@ import {
   listFieldDefsBySet,
   listFieldRecords,
   listFieldSets,
+  updateFieldLabel,
 } from './fieldRepo.js';
 import { hasTestDb, makeTestPool, randomUUID, seedTenant, withRollback } from './testSupport.js';
 import type { Fixture } from './testSupport.js';
@@ -91,6 +94,19 @@ suite('fieldRepo / 整合', () => {
     });
   });
 
+  it('刪除欄位組：查無回 false，刪到回 true 且列表不再出現', async () => {
+    await withRollback(pool, async (client) => {
+      const fx = await seedTenant(client);
+      await insertFieldSet({ companyId: fx.companyId, name: '專案', system: false }, client);
+
+      expect(await deleteFieldSet(fx.companyId, '專案', client)).toBe(true);
+      expect(await findFieldSet(fx.companyId, '專案', client)).toBeUndefined();
+      expect((await listFieldSets(fx.companyId, client)).map((s) => s.name)).toEqual(['基本']);
+      // 已刪除的名稱再刪一次不報錯，回 false。
+      expect(await deleteFieldSet(fx.companyId, '專案', client)).toBe(false);
+    });
+  });
+
   // ----- 欄位定義 -----
 
   it('寫入欄位定義後可依名稱取回，rollupFn 與 kind 原樣還原', async () => {
@@ -137,6 +153,31 @@ suite('fieldRepo / 整合', () => {
       expect(inBasic.map((d) => d.name)).toEqual(['Comment', 'Title']);
       const inVcs = await listFieldDefsBySet(fx.companyId, '版控', client);
       expect(inVcs.map((d) => d.name)).toEqual(['BranchName']);
+    });
+  });
+
+  it('改欄位定義顯示名稱：只動 label，其餘欄位不變；查無回 undefined', async () => {
+    await withRollback(pool, async (client) => {
+      const fx = await seedTenant(client);
+      await insertFieldDef(makeMultiFieldDef(fx.companyId, 'Comment'), client);
+
+      const updated = await updateFieldLabel(fx.companyId, 'Comment', '留言', client);
+      expect(updated?.label).toBe('留言');
+      expect(updated?.kind).toBe('multi');
+      expect(updated?.fieldSetName).toBe('基本');
+
+      expect(await updateFieldLabel(fx.companyId, '不存在的欄位', '無效', client)).toBeUndefined();
+    });
+  });
+
+  it('刪除欄位定義：查無回 false，刪到回 true 且列表不再出現', async () => {
+    await withRollback(pool, async (client) => {
+      const fx = await seedTenant(client);
+      await insertFieldDef(makeMultiFieldDef(fx.companyId, 'Comment'), client);
+
+      expect(await deleteFieldDef(fx.companyId, 'Comment', client)).toBe(true);
+      expect(await findFieldDef(fx.companyId, 'Comment', client)).toBeUndefined();
+      expect(await deleteFieldDef(fx.companyId, 'Comment', client)).toBe(false);
     });
   });
 

@@ -242,6 +242,55 @@ export interface IssueTypeDefinition {
   readonly system: boolean;
 }
 
+/** 流程狀態。對齊 issueRepo 的 WorkflowState。供流程轉換規則管理使用。 */
+export interface WorkflowState {
+  readonly companyId: string;
+  readonly issueTypeId: string;
+  readonly name: string;
+  readonly sortOrder: number;
+  readonly isInitial: boolean;
+  readonly isTerminal: boolean;
+}
+
+/** 流程轉換。對齊 issueRepo 的 WorkflowTransition。 */
+export interface WorkflowTransition {
+  readonly companyId: string;
+  readonly issueTypeId: string;
+  readonly fromState: string;
+  readonly toState: string;
+  /** 執行者角色限定；null 代表不限角色。 */
+  readonly requiredRole: string | null;
+  /** 必填欄位名稱清單；空清單代表無必填。 */
+  readonly requiredFields: readonly string[];
+}
+
+/** 結案原因選項。對齊 issueRepo 的 ResolutionOption。 */
+export interface ResolutionOption {
+  readonly companyId: string;
+  readonly issueTypeId: string;
+  readonly value: string;
+  readonly system: boolean;
+}
+
+/** 單一型別的完整流程定義，GET /:id/workflow 的回傳形狀。 */
+export interface WorkflowDefinition {
+  readonly states: readonly WorkflowState[];
+  readonly transitions: readonly WorkflowTransition[];
+  readonly resolutionOptions: readonly ResolutionOption[];
+}
+
+/** PUT /:id/workflow 的輸入：三清單整包替換，比照後端 WorkflowPutBody 契約。 */
+export interface UpdateWorkflowDefinitionInput {
+  readonly states: readonly { name: string; isInitial: boolean; isTerminal: boolean }[];
+  readonly transitions: readonly {
+    fromState: string;
+    toState: string;
+    requiredRole: string | null;
+    requiredFields: readonly string[];
+  }[];
+  readonly resolutionOptions: readonly { value: string }[];
+}
+
 /** 工單單一欄位值。對齊 issueRepo 的 StoredFieldValue。 */
 export interface IssueFieldValue {
   readonly companyId: string;

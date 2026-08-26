@@ -8,3 +8,4 @@
 export * from './types.js';
 export * from './validateStatusTransition.js';
 export * from './changeIssueStatus.js';
+export * from './updateWorkflowDefinition.js';

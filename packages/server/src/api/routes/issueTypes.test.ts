@@ -121,4 +121,116 @@ suite('issue type routes', () => {
     });
     expect(missing.statusCode).toBe(404);
   });
+
+  describe('流程定義路由 /:id/workflow', () => {
+    async function createType(): Promise<string> {
+      await createSet('基本');
+      const created = await call({
+        method: 'POST',
+        url: '/api/issue-types',
+        payload: { name: 'bug', label: 'Bug', fieldSets: ['基本'] },
+      });
+      return created.json().issueType.id as string;
+    }
+
+    it('讀取查無型別回 404', async () => {
+      const res = await call({
+        method: 'GET',
+        url: '/api/issue-types/00000000-0000-0000-0000-000000000000/workflow',
+      });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('讀取剛建立型別的預設流程，三狀態與兩轉換皆已由 initializeTypeWorkflow 種好', async () => {
+      const id = await createType();
+      const res = await call({ method: 'GET', url: `/api/issue-types/${id}/workflow` });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.states.map((s: { name: string }) => s.name)).toEqual(['待處理', '處理中', '已關閉']);
+      expect(body.transitions).toHaveLength(2);
+      expect(body.resolutionOptions.length).toBeGreaterThan(0);
+    });
+
+    it('整包替換：新增一條帶 requiredRole／requiredFields 的轉換', async () => {
+      const id = await createType();
+      const res = await call({
+        method: 'PUT',
+        url: `/api/issue-types/${id}/workflow`,
+        payload: {
+          states: [
+            { name: '待處理', isInitial: true, isTerminal: false },
+            { name: '已關閉', isInitial: false, isTerminal: true },
+          ],
+          transitions: [
+            {
+              fromState: '待處理',
+              toState: '已關閉',
+              requiredRole: '管理員',
+              requiredFields: ['resolution'],
+            },
+          ],
+          resolutionOptions: [{ value: '已完成' }],
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.transitions).toHaveLength(1);
+      expect(body.transitions[0].requiredRole).toBe('管理員');
+      expect(body.transitions[0].requiredFields).toEqual(['resolution']);
+
+      const reread = await call({ method: 'GET', url: `/api/issue-types/${id}/workflow` });
+      expect(reread.json().states.map((s: { name: string }) => s.name)).toEqual(['待處理', '已關閉']);
+    });
+
+    it('起始狀態不是恰好一個回 422', async () => {
+      const id = await createType();
+      const res = await call({
+        method: 'PUT',
+        url: `/api/issue-types/${id}/workflow`,
+        payload: {
+          states: [
+            { name: '待處理', isInitial: false, isTerminal: false },
+            { name: '已關閉', isInitial: false, isTerminal: true },
+          ],
+          transitions: [],
+          resolutionOptions: [],
+        },
+      });
+      expect(res.statusCode).toBe(422);
+      expect(res.json().error.code).toBe('INITIAL_STATE_COUNT_INVALID');
+    });
+
+    it('轉換引用不存在的狀態回 422，且不落庫（整包替換前擋下）', async () => {
+      const id = await createType();
+      const res = await call({
+        method: 'PUT',
+        url: `/api/issue-types/${id}/workflow`,
+        payload: {
+          states: [{ name: '待處理', isInitial: true, isTerminal: false }],
+          transitions: [
+            { fromState: '待處理', toState: '不存在', requiredRole: null, requiredFields: [] },
+          ],
+          resolutionOptions: [],
+        },
+      });
+      expect(res.statusCode).toBe(422);
+      expect(res.json().error.code).toBe('TRANSITION_STATE_NOT_FOUND');
+
+      const reread = await call({ method: 'GET', url: `/api/issue-types/${id}/workflow` });
+      expect(reread.json().states.map((s: { name: string }) => s.name)).toEqual(['待處理', '處理中', '已關閉']);
+    });
+
+    it('寫入查無型別回 404', async () => {
+      const res = await call({
+        method: 'PUT',
+        url: '/api/issue-types/00000000-0000-0000-0000-000000000000/workflow',
+        payload: {
+          states: [{ name: '待處理', isInitial: true, isTerminal: false }],
+          transitions: [],
+          resolutionOptions: [],
+        },
+      });
+      expect(res.statusCode).toBe(404);
+    });
+  });
 });

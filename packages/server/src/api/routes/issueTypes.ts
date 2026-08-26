@@ -6,8 +6,14 @@ import type { Pool } from 'pg';
 import { currentIdentity } from '../../auth/middleware.js';
 import { withTransaction } from '../../db/client.js';
 import { fieldRepo, issueRepo } from '../../db/repositories/index.js';
-import type { IssueTypeDefinition } from '../../db/repositories/index.js';
-import { sendError } from '../errors.js';
+import type {
+  IssueTypeDefinition,
+  ResolutionOptionInput,
+  WorkflowStateInput,
+  WorkflowTransitionInput,
+} from '../../db/repositories/index.js';
+import { validateWorkflowDefinitionEdit } from '../../domain/index.js';
+import { sendError, sendValidationFailure } from '../errors.js';
 
 // 工單型別路由：/api/issue-types 之下的工單型別讀寫。
 //
@@ -53,6 +59,47 @@ const idParamsSchema = {
   properties: { id: { type: 'string', minLength: 1 } },
 } as const;
 
+const workflowStateSchema = {
+  type: 'object',
+  required: ['name', 'isInitial', 'isTerminal'],
+  additionalProperties: false,
+  properties: {
+    name: { type: 'string', minLength: 1, maxLength: 100 },
+    isInitial: { type: 'boolean' },
+    isTerminal: { type: 'boolean' },
+  },
+} as const;
+
+const workflowTransitionSchema = {
+  type: 'object',
+  required: ['fromState', 'toState', 'requiredRole', 'requiredFields'],
+  additionalProperties: false,
+  properties: {
+    fromState: { type: 'string', minLength: 1, maxLength: 100 },
+    toState: { type: 'string', minLength: 1, maxLength: 100 },
+    requiredRole: { type: ['string', 'null'] },
+    requiredFields: { type: 'array', items: { type: 'string', minLength: 1 } },
+  },
+} as const;
+
+const resolutionOptionSchema = {
+  type: 'object',
+  required: ['value'],
+  additionalProperties: false,
+  properties: { value: { type: 'string', minLength: 1, maxLength: 100 } },
+} as const;
+
+const workflowPutBodySchema = {
+  type: 'object',
+  required: ['states', 'transitions', 'resolutionOptions'],
+  additionalProperties: false,
+  properties: {
+    states: { type: 'array', items: workflowStateSchema },
+    transitions: { type: 'array', items: workflowTransitionSchema },
+    resolutionOptions: { type: 'array', items: resolutionOptionSchema },
+  },
+} as const;
+
 interface IssueTypeBody {
   readonly name: string;
   readonly label: string;
@@ -62,6 +109,12 @@ interface IssueTypeBody {
 interface IssueTypePatchBody {
   readonly label: string;
   readonly fieldSets: readonly string[];
+}
+
+interface WorkflowPutBody {
+  readonly states: readonly WorkflowStateInput[];
+  readonly transitions: readonly WorkflowTransitionInput[];
+  readonly resolutionOptions: readonly ResolutionOptionInput[];
 }
 
 /** 逐一核對 fieldSets 清單裡的欄位組都存在；回傳缺漏的名稱，全存在則回空陣列。 */
@@ -144,6 +197,71 @@ export const issueTypeRoutes: FastifyPluginAsync<IssueTypeRoutesOptions> = async
         return sendError(reply, 404, 'ISSUE_TYPE_NOT_FOUND', '工單型別不存在');
       }
       return reply.status(200).send({ issueType: updated });
+    },
+  );
+
+  // 讀該型別完整流程定義：狀態、轉換、結案原因三清單一次帶回，供管理畫面初始載入。
+  app.get<{ Params: { id: string } }>(
+    '/:id/workflow',
+    { schema: { params: idParamsSchema } },
+    async (request, reply) => {
+      const { companyId } = currentIdentity(request);
+      const issueType = await issueRepo.getIssueType(companyId, request.params.id, pool);
+      if (issueType === undefined) {
+        return sendError(reply, 404, 'ISSUE_TYPE_NOT_FOUND', '工單型別不存在');
+      }
+      const [states, transitions, resolutionOptions] = await Promise.all([
+        issueRepo.listWorkflowStates(companyId, request.params.id, pool),
+        issueRepo.listWorkflowTransitions(companyId, request.params.id, pool),
+        issueRepo.listResolutionOptions(companyId, request.params.id, pool),
+      ]);
+      return reply.status(200).send({ states, transitions, resolutionOptions });
+    },
+  );
+
+  // 改該型別完整流程定義：三清單整包替換，同交易內依序 states → transitions →
+  // resolutionOptions（states 先落地，transitions 的外鍵才有依據；比照
+  // issueRepo.initializeTypeWorkflow 同一套「三張表同交易內清空重建」）。
+  // 對應 Spec updateWorkflowDefinition：狀態、轉換（含執行者角色與必填欄位）、
+  // 起始／終止狀態、結案原因皆可加可改可刪，前端每次送當前完整三份。
+  app.put<{ Params: { id: string }; Body: WorkflowPutBody }>(
+    '/:id/workflow',
+    { schema: { params: idParamsSchema, body: workflowPutBodySchema } },
+    async (request, reply) => {
+      const { companyId } = currentIdentity(request);
+      const issueType = await issueRepo.getIssueType(companyId, request.params.id, pool);
+      if (issueType === undefined) {
+        return sendError(reply, 404, 'ISSUE_TYPE_NOT_FOUND', '工單型別不存在');
+      }
+
+      const validation = validateWorkflowDefinitionEdit(request.body.states, request.body.transitions);
+      if (!validation.ok) {
+        return sendValidationFailure(reply, validation);
+      }
+
+      const result = await withTransaction(async (tx) => {
+        const states = await issueRepo.replaceWorkflowStates(
+          companyId,
+          request.params.id,
+          request.body.states,
+          tx,
+        );
+        const transitions = await issueRepo.replaceWorkflowTransitions(
+          companyId,
+          request.params.id,
+          request.body.transitions,
+          tx,
+        );
+        const resolutionOptions = await issueRepo.replaceResolutionOptions(
+          companyId,
+          request.params.id,
+          request.body.resolutionOptions,
+          tx,
+        );
+        return { states, transitions, resolutionOptions };
+      }, pool);
+
+      return reply.status(200).send(result);
     },
   );
 };

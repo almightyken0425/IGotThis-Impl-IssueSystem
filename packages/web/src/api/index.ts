@@ -9,6 +9,7 @@ export * as viewsApi from './views';
 export * as issuesApi from './issues';
 export * as fieldsApi from './fields';
 export * as issueTypesApi from './issueTypes';
+export * as workflowApi from './workflow';
 export * as relationsApi from './relations';
 export * as calendarsApi from './calendars';
 export * as accountsApi from './accounts';
@@ -32,13 +33,18 @@ export type {
   Mgmt,
   Product,
   RelationTypeDefinition,
+  ResolutionOption,
   Team,
   TopicIssueRow,
   UpdateIssueInput,
   UpdateViewInput,
+  UpdateWorkflowDefinitionInput,
   View,
   ViewSortEntry,
   WorkCalendar,
+  WorkflowDefinition,
+  WorkflowState,
+  WorkflowTransition,
   WorkspaceContext,
   WorkspaceIssue,
   WorkspaceIssuesResult,

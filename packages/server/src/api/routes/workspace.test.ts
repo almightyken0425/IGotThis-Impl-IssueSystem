@@ -235,10 +235,13 @@ suite('workspace routes', () => {
     const issueTypeId = (await call({ method: 'GET', url: '/api/workspace' })).json().issueType.id;
 
     // DEFAULT_TRANSITIONS 種子的四筆皆 requiredRole: null，直接改資料庫模擬有角色限制的轉換。
+    // 角色名不可用「管理員」：呼叫端在上面 POST /api/workspace/issues 時已觸發
+    // ensurePermissionBootstrap，公司首位帳號自動拿到「管理員」Role（見 workspace.ts
+    // DEFAULT_ADMIN_ROLE_TITLE），用同名角色測「未掛角色」前提會失真。
     await pool.query(
       `UPDATE workflow_transitions SET required_role = $1
        WHERE company_id = $2 AND issue_type_id = $3 AND from_state = $4 AND to_state = $5`,
-      ['管理員', session.companyId, issueTypeId, '待處理', '處理中'],
+      ['審核員', session.companyId, issueTypeId, '待處理', '處理中'],
     );
 
     const denied = await call({
@@ -256,12 +259,12 @@ suite('workspace routes', () => {
       `INSERT INTO level_definitions
          (id, company_id, name, system, can_read, can_comment, can_create, can_edit_own, can_edit_any, can_archive, can_structure, can_assign_role, created_on, updated_on)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)`,
-      [levelId, session.companyId, '管理員層級', false, true, true, true, true, true, true, true, true, now],
+      [levelId, session.companyId, '審核員層級', false, true, true, true, true, true, true, true, true, now],
     );
     await pool.query(
       `INSERT INTO roles (id, company_id, role_title, level_id, type_admin, org_admin, perm_admin, created_on, updated_on)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)`,
-      [roleId, session.companyId, '管理員', levelId, false, false, false, now],
+      [roleId, session.companyId, '審核員', levelId, false, false, false, now],
     );
     await pool.query(
       `INSERT INTO account_roles (id, company_id, account_id, role_id, created_on, updated_on)

@@ -415,7 +415,9 @@ async function collectDisplayLevelCandidates(
   companyId: string,
   topicIssueId: string,
   containerTypeId: string,
-  childrenTypeId: string,
+  // undefined 代表此 Company 尚未建立 Children 型別：只收 Container 直接候選
+  // （皆為第 1 層），不往下 BFS——沒有母子型別就沒有第 2、3 層可言。
+  childrenTypeId: string | undefined,
 ): Promise<{ candidateIssueIds: string[]; relations: RelationCandidate[] }> {
   const relations: RelationCandidate[] = [];
   const candidateIds = new Set<string>();
@@ -441,7 +443,7 @@ async function collectDisplayLevelCandidates(
     }
   }
 
-  while (queue.length > 0) {
+  while (childrenTypeId !== undefined && queue.length > 0) {
     const current = queue.shift();
     if (current === undefined) break;
     const childEdges = await relationRepo.findRelationsFromIssue(companyId, current, childrenTypeId, pool);
@@ -807,7 +809,10 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
       // 無權限工項是否有排程。修復需要先實作 readCrossBoundaryRelation，且甘特長條在
       // 「僅提供編號」規則下該顯示成什麼樣本身是未解的設計問題，這輪不做。
       const levelBarsOf = async (topicIssueId: string): Promise<DevOrderLevelGroup[]> => {
-        if (containerType === undefined || childrenType === undefined) {
+        // Container 型別不存在時，連第 1 層的候選都無從查起，三層皆為 null。
+        // Children 型別不存在但 Container 存在時，仍可查到第 1 層候選——只是沒有
+        // 母子關聯往下展開，不因此連第 1 層一起交白卷。
+        if (containerType === undefined) {
           return DEV_ORDER_LEVEL_NUMBERS.map((level) => ({ level, bars: null }));
         }
         const { candidateIssueIds, relations } = await collectDisplayLevelCandidates(
@@ -815,16 +820,20 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
           companyId,
           topicIssueId,
           containerType.id,
-          childrenType.id,
+          childrenType?.id,
         );
 
         const issueIdsByLevel = new Map<number, string[]>();
         for (const issueId of candidateIssueIds) {
-          const level = computeIssueLevel({
-            issueId,
-            relations,
-            childrenRelationTypeId: childrenType.id,
-          });
+          // 沒有 Children 型別就沒有母子鏈，Container 直接候選必為第 1 層。
+          const level =
+            childrenType === undefined
+              ? 1
+              : computeIssueLevel({
+                  issueId,
+                  relations,
+                  childrenRelationTypeId: childrenType.id,
+                });
           const group = issueIdsByLevel.get(level);
           if (group === undefined) issueIdsByLevel.set(level, [issueId]);
           else group.push(issueId);

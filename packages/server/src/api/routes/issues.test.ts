@@ -81,6 +81,15 @@ suite('issue routes', () => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
       [companyId, FIELD_NAME, '基本', 'single', 'text', false, false, false, null, false, '標題'],
     );
+    // ChangeLog 系統欄位定義：appendChangeLog 寫入時 field_name 固定用這個常數，
+    // 沒有這筆 field_defs 會撞 fk_issue_field_records_field 外鍵（見 workspace.ts
+    // ensureIssueType 同樣的補注）。
+    await pool.query(
+      `INSERT INTO field_defs
+         (company_id, name, field_set_name, kind, value_type, system, readonly, rollupable, rollup_fn, tracked, label)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [companyId, fieldRepo.CHANGE_LOG_FIELD_NAME, '基本', 'multi', 'text', true, true, false, null, false, '變更歷史'],
+    );
   });
 
   // ---- helpers ----
@@ -320,15 +329,8 @@ suite('issue routes', () => {
   it('列出工單異動歷史，依時間新到舊排序', async () => {
     const issue = await createIssue();
 
-    // ChangeLog 為系統多筆欄位，issue_field_records 對 (company_id, field_name)
-    // 有外鍵指向 field_defs，寫入前須先有這筆定義；本檔 fixture 未經 workspace
-    // 的 ensureIssueType 啟動流程，比照其種子內容直插。
-    await pool.query(
-      `INSERT INTO field_defs
-         (company_id, name, field_set_name, kind, value_type, system, readonly, rollupable, rollup_fn, tracked, label)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-      [session.companyId, 'ChangeLog', '基本', 'multi', 'text', true, true, false, null, false, '變更歷史'],
-    );
+    // ChangeLog 的 field_defs 已在 beforeEach 種好，這裡不再重插一次
+    // （曾各自插一次，兩處同名撞 pk_field_defs）。
 
     const earlier = Date.now() - 1000;
     const later = Date.now();

@@ -6,12 +6,8 @@ import type { Pool } from 'pg';
 import { currentIdentity } from '../../auth/middleware.js';
 import { withTransaction } from '../../db/client.js';
 import { fieldRepo, issueRepo } from '../../db/repositories/index.js';
-import type {
-  IssueTypeDefinition,
-  ResolutionOptionInput,
-  WorkflowStateInput,
-  WorkflowTransitionInput,
-} from '../../db/repositories/index.js';
+import type { IssueTypeDefinition, WorkflowTransitionInput } from '../../db/repositories/index.js';
+import type { ResolutionOptionValue, WorkflowStateEdit } from '../../domain/index.js';
 import { validateWorkflowDefinitionEdit } from '../../domain/index.js';
 import { sendError, sendValidationFailure } from '../errors.js';
 
@@ -112,9 +108,12 @@ interface IssueTypePatchBody {
 }
 
 interface WorkflowPutBody {
-  readonly states: readonly WorkflowStateInput[];
+  // 對齊 workflowStateSchema 的 wire 形狀：不含 sortOrder。順序即 sortOrder，
+  // 由 handler 依陣列位置換算後才交給 repo 層的 WorkflowStateInput。
+  readonly states: readonly WorkflowStateEdit[];
   readonly transitions: readonly WorkflowTransitionInput[];
-  readonly resolutionOptions: readonly ResolutionOptionInput[];
+  // 對齊 resolutionOptionSchema 的 wire 形狀：不含 system，一律視為使用者自訂。
+  readonly resolutionOptions: readonly ResolutionOptionValue[];
 }
 
 /** 逐一核對 fieldSets 清單裡的欄位組都存在；回傳缺漏的名稱，全存在則回空陣列。 */
@@ -239,11 +238,23 @@ export const issueTypeRoutes: FastifyPluginAsync<IssueTypeRoutesOptions> = async
         return sendValidationFailure(reply, validation);
       }
 
+      // wire 上的 states 不含 sortOrder（順序即 sortOrder），送進 repo 層前
+      // 依陣列位置換算；repo 的 WorkflowStateInput 要求這個欄位非 undefined。
+      const statesWithSortOrder = request.body.states.map((s, index) => ({
+        ...s,
+        sortOrder: index,
+      }));
+      // wire 上的 resolutionOptions 不含 system，整包替換一律視為使用者自訂。
+      const resolutionOptionsWithSystem = request.body.resolutionOptions.map((r) => ({
+        ...r,
+        system: false,
+      }));
+
       const result = await withTransaction(async (tx) => {
         const states = await issueRepo.replaceWorkflowStates(
           companyId,
           request.params.id,
-          request.body.states,
+          statesWithSortOrder,
           tx,
         );
         const transitions = await issueRepo.replaceWorkflowTransitions(
@@ -255,7 +266,7 @@ export const issueTypeRoutes: FastifyPluginAsync<IssueTypeRoutesOptions> = async
         const resolutionOptions = await issueRepo.replaceResolutionOptions(
           companyId,
           request.params.id,
-          request.body.resolutionOptions,
+          resolutionOptionsWithSystem,
           tx,
         );
         return { states, transitions, resolutionOptions };

@@ -178,7 +178,8 @@
     - workspace.ts 的角色查詢已補真實資料，issues.ts 泛用欄位路徑已擋 status／resolution，不再能繞過轉換規則
     - 管理介面已補：`WorkflowTransitionScreen`（路由 `/workflow`）左欄選工單型別，右側狀態／轉換／結案原因三區塊，可建立帶 `requiredRole`／`requiredFields` 的轉換規則
     - 範圍縮減：狀態、轉換只做新增／移除，不做行內編輯表單（「編輯」走「先移除、再用新值新增」這條路徑）；起始狀態（`isInitial`）可透過「設為起始」按鈕改，但目前系統建工單的初始狀態仍寫死 `DEFAULT_STATUS = '待處理'`（workspace.ts），未讀取 `isInitial`，這塊留待需要時另開主題
-    - 未端到端驗證：本機無 PostgreSQL 連線環境（密碼未解），只驗過 typecheck／lint／11 組 domain 純函式測試與前端路由不崩潰；`issueTypes.test.ts` 新增的 6 組整合測試因無 `TEST_DATABASE_URL` 靜默略過，需要你有 DB 環境時跑 `npm test` 補驗
+    - 已端到端驗證：補上本機 PostgreSQL 環境後跑滿整套整合測試（657 組），抓到並修掉三個先前被靜默略過測試掩蓋的真 bug——`replaceWorkflowStates`／`replaceWorkflowTransitions` 同交易內先刪 states 會撞外鍵（改 `workflow_transitions` 兩條 FK 為 `DEFERRABLE INITIALLY DEFERRED`，見 migration `003_defer_workflow_transition_fks.sql`）；`PUT /:id/workflow` 的 `states`／`resolutionOptions` 未依 wire schema 補上 `sortOrder`／`system` 就轉頭餵給 repo 層，導致整包替換必噴 500；Gantt 层級計算把「只有 Container 型別、無 Children 型別」誤判成「兩者皆缺」，第 1 層候選連帶交白卷
+    - 已知殘留：`resolution_options` 資料表沒有排序欄位，`listResolutionOptions` 用 `ORDER BY value` 字母序回傳，不保證跟 `DEFAULT_RESOLUTIONS`／管理端送出的順序一致；要保序需另開主題補 `sort_order` 欄位（含 migration 與 API 契約變動），本輪未動
 - **view_layer：**
     - `resolveViewCalendar`／`computeIssueDuration`／`admitNewContainerIssue`／`applyViewFilter` 四個 domain 函式皆已接進 views.ts
     - 新單自動入表已完成，ListScreen 建單後自動 reload
@@ -191,5 +192,5 @@
     - 工單詳情頁已補（`IssueDetailScreen`）：欄位／關聯／異動歷史三區，List／Kanban／DevOrder 三處入口可導覽進入
     - 工單詳情頁的欄位編輯已對齊 design 定案：非唯讀欄位一律可編輯，不分值型別。白名單四欄位 title/assignee/point/due 走 workspace.ts PATCH，其餘含自訂欄位走 issues.ts 泛用路徑，兩條都已記變更歷史
     - 型別維護與定義區管理介面待補
-    - 登入頁在 design git 尚無定案畫面，目前以既有 token 就地組值頂著
+    - 登入頁已對齊 design 定案畫面（`LoginScreen` 逐名對齊 `no7_login_screen`）
     - 主題選擇已接持久化，存瀏覽器 localStorage，不跟帳號走，換裝置需重新選一次

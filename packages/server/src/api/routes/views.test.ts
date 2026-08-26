@@ -47,9 +47,12 @@ async function seedContainers(pool: Pool, companyId: string): Promise<Containers
       'INSERT INTO issue_sets (id, company_id, mgmt_id, name, key) VALUES ($1,$2,$3,$4,$5)',
       [issueSetId, companyId, mgmtId, 'Backlog', 'PROJ'],
     );
+    // 型別名不可用 'task'：ensureWorkspace 的 DEFAULT_ISSUE_TYPE_NAME 也是這個字面值，
+    // beforeEach 先打過一次 GET /api/workspace 種好該筆，重名會撞
+    // uq_issue_type_definitions_company_name。
     await client.query(
       'INSERT INTO issue_type_definitions (id, company_id, name, label, field_sets, system) VALUES ($1,$2,$3,$4,$5,$6)',
-      [issueTypeId, companyId, 'task', 'Task', JSON.stringify([]), false],
+      [issueTypeId, companyId, 'view-fixture-task', 'Task', JSON.stringify([]), false],
     );
     await client.query('COMMIT');
     return { teamId, productId, mgmtId, issueSetId, issueTypeId };
@@ -90,6 +93,10 @@ suite('view routes', () => {
     await pool.query('TRUNCATE companies CASCADE');
     session = await registerSession(app);
     call = authed(app, session.cookie);
+    // 打一次真路由觸發 ensureWorkspace：種好 field_defs（title／StartTime／
+    // EndTime 等標準欄位）並讓本帳號拿到公司範圍的管理員權限，兩者是後續
+    // setFieldValue 直插與 Mgmt 讀取權檢查的前提；容器骨架本身仍走 SQL 直插。
+    await call({ method: 'GET', url: '/api/workspace' });
     containers = await seedContainers(pool, session.companyId);
   });
 
@@ -1167,11 +1174,11 @@ suite('view routes', () => {
     }
     const res = await call({ method: 'GET', url: '/api/views/kanban-columns' });
     expect(res.statusCode).toBe(200);
-    expect(res.json().columns.map((c: { name: string }) => c.name)).toEqual([
-      'Todo',
-      'Doing',
-      'Done',
-    ]);
+    // beforeEach 的 GET /api/workspace 會種出另一個預設工單型別與其自身流程狀態，
+    // 併入同一份欄序；本測試只斷言自己種的三欄相對順序，不假設公司內僅此一型別。
+    const names = res.json().columns.map((c: { name: string }) => c.name);
+    const ownNames = names.filter((name: string) => ['Todo', 'Doing', 'Done'].includes(name));
+    expect(ownNames).toEqual(['Todo', 'Doing', 'Done']);
   });
 
   // ---- 彙總 ----

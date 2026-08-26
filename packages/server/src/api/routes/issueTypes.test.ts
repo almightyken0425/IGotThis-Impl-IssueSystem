@@ -146,8 +146,13 @@ suite('issue type routes', () => {
       const res = await call({ method: 'GET', url: `/api/issue-types/${id}/workflow` });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.states.map((s: { name: string }) => s.name)).toEqual(['待處理', '處理中', '已關閉']);
-      expect(body.transitions).toHaveLength(2);
+      expect(body.states.map((s: { name: string }) => s.name)).toEqual([
+        '待處理',
+        '處理中',
+        '審查中',
+        '已完成',
+      ]);
+      expect(body.transitions).toHaveLength(4);
       expect(body.resolutionOptions.length).toBeGreaterThan(0);
     });
 
@@ -217,7 +222,12 @@ suite('issue type routes', () => {
       expect(res.json().error.code).toBe('TRANSITION_STATE_NOT_FOUND');
 
       const reread = await call({ method: 'GET', url: `/api/issue-types/${id}/workflow` });
-      expect(reread.json().states.map((s: { name: string }) => s.name)).toEqual(['待處理', '處理中', '已關閉']);
+      expect(reread.json().states.map((s: { name: string }) => s.name)).toEqual([
+        '待處理',
+        '處理中',
+        '審查中',
+        '已完成',
+      ]);
     });
 
     it('寫入查無型別回 404', async () => {

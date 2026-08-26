@@ -28,7 +28,7 @@ import { useNavigate } from 'react-router';
 import { ApiError, viewsApi, workspaceApi } from '../../api';
 import type { WorkspaceContext, WorkspaceIssue } from '../../api';
 import { useCurrentView } from '../../app/CurrentViewContext';
-import { Button, Checkbox, IconButton, Select, TextInput } from '../../components/controls';
+import { Button, Checkbox, Chip, IconButton, Select, TextInput } from '../../components/controls';
 import { DataTable, EmptyState, FilterNotice } from '../../components/data';
 import type {
   DueTone,
@@ -66,6 +66,7 @@ import {
   LIST_GROUP_OPTIONS,
   LIST_SORT_OPTIONS,
 } from './fixtures';
+import type { ListFilterChip } from './fixtures';
 import { LIST_SCREEN_TOKENS } from './tokens';
 
 const T = LIST_SCREEN_TOKENS;
@@ -215,6 +216,53 @@ function ViewTitle({ theme, name, count }: ViewTitleProps) {
       >
         {`${count} 筆工單`}
       </span>
+    </div>
+  );
+}
+
+// ─── FilterChipBar ───────────────────────────────────────────
+// 已套用篩選條件列，design 定案：唯讀標籤，條件本身要改走「篩選」入口，
+// 互動清單沒有「在條件列上直接移除」。條件為空時不渲染本列。
+//
+// filterConfig 目前沒有任何寫入路徑（篩選面板本身 design 未定案，見「篩選」
+// 按鈕 onClick 待補），故實務上多半是空的；解析邏輯先備妥，等面板接上寫入
+// 後這裡不用再動。
+
+function fieldLabel(fieldName: string): string {
+  return LIST_COLUMNS.find((c) => c.key === fieldName)?.label ?? fieldName;
+}
+
+/** 把 View.filterConfig（unknown）安全解析成 Chip 展示清單；格式不符 fail-open 回空陣列，比照後端 parseFilterConfig 同一套寬容度。 */
+function parseFilterChips(filterConfig: unknown): readonly ListFilterChip[] {
+  if (typeof filterConfig !== 'object' || filterConfig === null) return [];
+  const conditions = (filterConfig as { conditions?: unknown }).conditions;
+  if (!Array.isArray(conditions)) return [];
+  const chips: ListFilterChip[] = [];
+  for (const condition of conditions) {
+    if (typeof condition !== 'object' || condition === null) continue;
+    const fieldName = (condition as { fieldName?: unknown }).fieldName;
+    const value = (condition as { value?: unknown }).value;
+    if (typeof fieldName !== 'string') continue;
+    chips.push({ label: fieldLabel(fieldName), value: String(value) });
+  }
+  return chips;
+}
+
+interface FilterChipBarProps {
+  readonly chips: readonly ListFilterChip[];
+}
+
+function FilterChipBar({ chips }: FilterChipBarProps) {
+  const { theme } = useTheme();
+  if (chips.length === 0) return null;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: SPACING.xs }}>
+      <span style={{ ...typeStyle(T.VIEW_META_TYPE), color: theme.text.tertiary, whiteSpace: 'nowrap' }}>
+        已套用篩選
+      </span>
+      {chips.map((chip) => (
+        <Chip key={`${chip.label}-${chip.value}`} label={chip.label} value={chip.value} />
+      ))}
     </div>
   );
 }
@@ -481,6 +529,11 @@ export function ListScreen() {
 
   const rows = useMemo(() => sortRows(allRows, sort), [allRows, sort]);
 
+  const filterChips = useMemo(
+    () => parseFilterChips(currentView?.filterConfig),
+    [currentView?.filterConfig],
+  );
+
   const columns = useMemo(
     () => columnsFromConfig(columnConfigDraft, LIST_COLUMNS),
     [columnConfigDraft],
@@ -586,6 +639,8 @@ export function ListScreen() {
         label="建立工單"
         onClick={() => setCreateOpen((open) => !open)}
       />
+      {/* 篩選面板本身互動 design 未定案，入口按鈕先備位，onClick 待面板定案後補。 */}
+      <Button variant="secondary" iconLeft="filter" label="篩選" disabled />
       <Select
         prefix="排序"
         options={LIST_SORT_OPTIONS}
@@ -640,6 +695,8 @@ export function ListScreen() {
           padding: `${T.CONTENT_PADDING_Y}px ${T.CONTENT_PADDING_X}px`,
         }}
       >
+        <FilterChipBar chips={filterChips} />
+
         <FilterNotice count={data?.permissionExcludedCount} />
 
         {createOpen && (

@@ -182,7 +182,7 @@
     - 新單自動入表已完成，ListScreen 建單後自動 reload
     - 工期天數呈現已在 DevOrderScreen 完成，不是 ListScreen 缺口
     - 日曆選用已接：AddViewForm 有日曆選用 Select，留白跟隨帳號預設日曆
-    - 篩選的按鈕與已套用條件展示 design 已定案，前端未接；篩選面板本身互動 design 未定案，待補
+    - 篩選按鈕與已套用條件展示已接：`ListScreen` 的 `FilterChipBar` 讀 `View.filterConfig` 唯讀展示；按鈕先備位 disabled，篩選面板本身互動 design 未定案，onClick 待補
     - DevOrderScreen 甘特圖座標轉換已完成，`devOrderGantt.ts` 有 23 組測試、已接進 views.ts 的 GET /:id/issues，三層級是後端真算的，非另開獨立主題
     - workspace.ts 種子已補 StartTime／EndTime（spec 標準欄位，帶 rollupable／earliest／latest），長條會依實際填值顯示；種子欄位本身不掛管理介面白名單，屬泛用欄位路徑可編輯
 - **web_shell：**

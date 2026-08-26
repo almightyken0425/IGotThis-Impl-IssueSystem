@@ -38,6 +38,10 @@ export interface TextInputProps {
   readonly clearable?: boolean;
   readonly fullWidth?: boolean;
   readonly style?: CSSProperties;
+  /** 原生 input type；design 的 canvas demo 不區分（純視覺展示），此為 impl 端功能性擴充，不影響視覺 token。預設 'text'。 */
+  readonly type?: 'text' | 'email' | 'password';
+  /** 原生 autoComplete 屬性，同 type 屬功能性擴充。 */
+  readonly autoComplete?: string;
 }
 
 export function TextInput({
@@ -51,6 +55,8 @@ export function TextInput({
   clearable = true,
   fullWidth = false,
   style,
+  type = 'text',
+  autoComplete,
 }: TextInputProps) {
   const { theme } = useTheme();
   const [hover, setHover] = useState(false);
@@ -94,9 +100,11 @@ export function TextInput({
         />
       )}
       <input
+        type={type}
         value={value}
         placeholder={placeholder}
         disabled={disabled}
+        {...(autoComplete !== undefined ? { autoComplete } : {})}
         onChange={(event) => onChange?.(event.target.value)}
         {...focusProps}
         style={{

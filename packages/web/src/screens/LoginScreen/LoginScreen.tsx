@@ -3,63 +3,52 @@
 // 角色：認證入口。單一 Company 模式下，首位使用者以「註冊」建立 Default Company
 // 與帳號，其後皆以「登入」進入。兩種模式共用同一組欄位，以切換連結互轉。
 //
-// design 對應：登入頁在 design git 尚無定案畫面，故本檔的組裝值就地由既有 atomic
-// 階梯與 theme 求值組出，等 design 出定案再逐名對齊。無 hex、無裸色。
+// 對側 design：no4_product_designs/no1_issue_system 的
+// project/30_screens/no7_login_screen/no7_login_screen.jsx（login／register 兩
+// variant），逐名對齊：LOGIN_SCREEN_TOKENS 對應 design 的同名 token、欄位排版
+// 沿用 design 選用的共用 TextInput（design 的 canvas demo 無 type 區分，
+// type／autoComplete 屬 impl 端功能性擴充，見 TextInput.tsx 開頭註解）。
 //
 // 送出後：成功由 AuthProvider 更新帳號態，導向工單清單；失敗顯示後端回的錯誤訊息。
 
 import { useState } from 'react';
-import type { CSSProperties, FormEvent } from 'react';
+import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router';
 
 import { ApiError } from '../../api';
-import { Button } from '../../components/controls';
+import { Button, TextInput } from '../../components/controls';
+import type { TextInputProps } from '../../components/controls';
 import { useAuth } from '../../auth/AuthContext';
-import {
-  BORDER_WIDTH,
-  controlShadow,
-  FONT_FAMILY,
-  RADIUS,
-  SPACING,
-  TYPE_STYLES,
-  useTheme,
-} from '../../theme';
+import { controlShadow, FONT_FAMILY, TYPE_STYLES, useTheme } from '../../theme';
 import type { Theme } from '../../theme';
 import { typeStyle } from '../typeStyle';
+import { LOGIN_SCREEN_TOKENS } from './tokens';
+
+const T = LOGIN_SCREEN_TOKENS;
 
 type Mode = 'login' | 'register';
 
 interface FieldProps {
   readonly theme: Theme;
   readonly label: string;
-  readonly type: string;
+  readonly type: NonNullable<TextInputProps['type']>;
   readonly value: string;
   readonly autoComplete: string;
   readonly onChange: (value: string) => void;
 }
 
-/** 表單欄位：標籤在上、輸入在下。登入頁專用，故就地實作、不動共用 TextInput。 */
+/** 表單欄位：標籤在上、輸入在下。對齊 design 的 LG_Field，複用共用 TextInput。 */
 function Field({ theme, label, type, value, autoComplete, onChange }: FieldProps) {
-  const inputStyle: CSSProperties = {
-    height: SPACING['3xl'], // 40
-    padding: `0 ${SPACING.md}px`,
-    borderRadius: RADIUS.md,
-    border: `${BORDER_WIDTH.hairline}px solid ${theme.border.input}`,
-    background: theme.bg.surface,
-    color: theme.text.primary,
-    fontFamily: FONT_FAMILY.base,
-    outline: 'none',
-    ...typeStyle(TYPE_STYLES.bodySm),
-  };
   return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: SPACING['2xs'] }}>
-      <span style={{ ...typeStyle(TYPE_STYLES.caption), color: theme.text.secondary }}>{label}</span>
-      <input
+    <label style={{ display: 'flex', flexDirection: 'column', gap: T.FIELD_GAP }}>
+      <span style={{ ...typeStyle(T.FIELD_LABEL_TYPE), color: theme.text.secondary }}>{label}</span>
+      <TextInput
         type={type}
         value={value}
         autoComplete={autoComplete}
-        onChange={(event) => onChange(event.target.value)}
-        style={inputStyle}
+        onChange={onChange}
+        clearable={false}
+        fullWidth
       />
     </label>
   );
@@ -108,7 +97,7 @@ export function LoginScreen() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: SPACING.xl,
+        padding: T.OUTER_PADDING,
         background: theme.bg.base,
         color: theme.text.primary,
         fontFamily: FONT_FAMILY.base,
@@ -117,23 +106,23 @@ export function LoginScreen() {
       <form
         onSubmit={onSubmit}
         style={{
-          width: SPACING['3xl'] * 9, // 360
+          width: T.FORM_WIDTH,
           maxWidth: '100%',
           display: 'flex',
           flexDirection: 'column',
-          gap: SPACING.lg,
-          padding: SPACING.xl,
+          gap: T.FORM_GAP,
+          padding: T.FORM_PADDING,
           background: theme.bg.surface,
-          border: `${BORDER_WIDTH.hairline}px solid ${theme.border.base}`,
-          borderRadius: RADIUS.lg,
+          border: `${T.FORM_BORDER_WIDTH}px solid ${theme.border.base}`,
+          borderRadius: T.FORM_RADIUS,
           boxShadow: controlShadow(theme, 'level2'),
         }}
       >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING['2xs'] }}>
-          <span style={{ ...typeStyle(TYPE_STYLES.sectionTitle), color: theme.text.primary }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: T.FIELD_GAP }}>
+          <span style={{ ...typeStyle(T.TITLE_TYPE), color: theme.text.primary }}>
             IGotThis 工單系統
           </span>
-          <span style={{ ...typeStyle(TYPE_STYLES.caption), color: theme.text.tertiary }}>
+          <span style={{ ...typeStyle(T.SUBTITLE_TYPE), color: theme.text.tertiary }}>
             {isRegister ? '建立帳號以開始使用' : '登入以繼續'}
           </span>
         </div>
@@ -190,7 +179,7 @@ export function LoginScreen() {
             cursor: 'pointer',
             padding: 0,
             color: theme.primary.main,
-            ...typeStyle(TYPE_STYLES.caption),
+            ...typeStyle(T.SWITCH_TYPE),
           }}
         >
           {isRegister ? '已有帳號？改用登入' : '還沒有帳號？改用註冊'}

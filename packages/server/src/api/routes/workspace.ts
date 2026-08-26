@@ -40,7 +40,8 @@ import type { WorkspaceIssueRow } from '../workspaceIssueRow.js';
 // 流程狀態當作各自獨立資源，前端要開一張可用的工單得先串起七八個建立呼叫。
 // 本路由把「單一 Company 模式下的預設工作區」收斂成一個冪等啟動點：
 //   - 種一個內建工單型別 task 與其流程狀態
-//   - 種內建欄位組「基本」與 title / status / assignee / point / due 欄位定義
+//   - 種內建欄位組「基本」與 title / status / assignee / point / due 欄位定義，
+//     另種 spec 標準欄位 StartTime / EndTime（大寫名，供甘特圖與 rollup 讀取）
 //   - 種一組預設 Team > Product > Mgmt + 初始工單集（KEY = IGT）
 // 並提供以「工單 + 欄位單值」摺疊而成的加值列，讓三個畫面直接消費。
 //
@@ -53,6 +54,14 @@ export interface WorkspaceRoutesOptions {
 }
 
 // ---- 預設工作區的固定命名 ----
+
+/**
+ * spec 標準大寫欄位名，對齊 views.ts 的同名常數（甘特圖讀值路徑直查
+ * issue_field_records，不經本檔的加值列摺疊，兩處各自持有字面字串，
+ * 不共用 import——比照本檔其餘欄位常數與 views.ts FIELD_TITLE 的既有模式）。
+ */
+const FIELD_START_TIME = 'StartTime';
+const FIELD_END_TIME = 'EndTime';
 
 const DEFAULT_ISSUE_TYPE_NAME = 'task';
 const DEFAULT_ISSUE_TYPE_LABEL = '工單';
@@ -103,13 +112,16 @@ interface FieldSeed {
   readonly label: string;
   readonly valueType: string;
   readonly tracked: boolean;
+  readonly rollupable?: boolean;
+  readonly rollupFn?: FieldDef['rollupFn'];
 }
 
 /**
  * 追蹤旗標依 spec no1_data_models/no3_field_model.md 的 StandardFieldCatalog：
- * Status／Assignee／StoryPoint 表列「開」，精確命中；due 對應表列「開」的
- * EndTime（MVP 把 StartTime/EndTime 簡化成單一 due 欄位，屬類比非精確同名）；
- * title／resolution 表列「-」，維持不追蹤。
+ * Status／Assignee／StoryPoint／StartTime／EndTime 表列「開」，精確命中；
+ * due 是 workspace MVP 自創的「到期日」欄位，不在 StandardFieldCatalog 表列，
+ * 服務 ListScreen／KanbanScreen 既有的到期提醒視覺，與 StartTime／EndTime
+ * 語意各自獨立、並存不互相取代；title／resolution 表列「-」，維持不追蹤。
  */
 const FIELD_SEEDS: readonly FieldSeed[] = [
   { name: FIELD_TITLE, label: '標題', valueType: 'text', tracked: false },
@@ -118,6 +130,22 @@ const FIELD_SEEDS: readonly FieldSeed[] = [
   { name: FIELD_POINT, label: '點數', valueType: 'number', tracked: true },
   { name: FIELD_DUE, label: '到期日', valueType: 'date', tracked: true },
   { name: FIELD_RESOLUTION, label: '結案原因', valueType: 'text', tracked: false },
+  {
+    name: FIELD_START_TIME,
+    label: '開始日期',
+    valueType: 'date',
+    tracked: true,
+    rollupable: true,
+    rollupFn: 'earliest',
+  },
+  {
+    name: FIELD_END_TIME,
+    label: '結束日期',
+    valueType: 'date',
+    tracked: true,
+    rollupable: true,
+    rollupFn: 'latest',
+  },
 ];
 
 // ---- 對外形狀 ----
@@ -157,8 +185,8 @@ async function ensureIssueType(
         valueType: seed.valueType,
         system: true,
         readonly: false,
-        rollupable: false,
-        rollupFn: null,
+        rollupable: seed.rollupable ?? false,
+        rollupFn: seed.rollupFn ?? null,
         tracked: seed.tracked,
         label: seed.label,
       };

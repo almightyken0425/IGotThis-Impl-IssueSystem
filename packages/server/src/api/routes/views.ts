@@ -328,9 +328,9 @@ function isRollupFieldValue(value: unknown): value is RollupFieldValue {
 /** 標題欄位名稱，對齊 workspace.ts 目前的種子欄位命名（小寫 title，非 spec 標準大寫名）。 */
 const FIELD_TITLE = 'title';
 /**
- * spec 標準欄位名稱。MVP workspace 種子尚未提供 StartTime（見 workspace.ts 註解：
- * StartTime/EndTime 簡化成單一 due 欄位），查得到值前 computeIssueDuration 恆回
- * hasDuration: false，這是已知、非本端點造成的限制。
+ * spec 標準欄位名稱，workspace.ts 的種子已種好這兩個欄位（帶 rollupable，
+ * earliest／latest 彙總）。工單若未實際填值，computeIssueDuration 仍回
+ * hasDuration: false，這是欄位空值的正常結果，不是限制。
  */
 const FIELD_START_TIME = 'StartTime';
 const FIELD_END_TIME = 'EndTime';

@@ -8,9 +8,9 @@
 //
 // 資料來源：依當前檢視（CurrentViewContext）查 /api/views/:id/issues，一次拿三個
 // 顯示層級（主題/需求/工項）算好的甘特座標與時間軸；無當前檢視時顯示空狀態，不發
-// 請求。MVP 工單種子尚未提供 StartTime／EndTime（workspace.ts 只有單一 due 欄位），
-// 故目前所有主題單在三層都會呈現「已排入順序、未排程」，這是後端計算結果如實反映，
-// 不是前端刻意隱藏。
+// 請求。workspace.ts 種子已種 StartTime／EndTime（spec 標準欄位，帶 rollup），
+// 主題單若未實際填這兩個值，仍會呈現「已排入順序、未排程」，這是後端計算結果
+// 如實反映欄位空值，不是前端刻意隱藏。
 //
 // 排序拖曳：只接受「已排序區內重排」與「未排序拖進已排序」兩種落點，PUT
 // /api/views/:id/sort/:issueId 寫入後端持久化排序值，成功後 reload 整批資料

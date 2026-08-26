@@ -534,7 +534,12 @@ export const workspaceRoutes: FastifyPluginAsync<WorkspaceRoutesOptions> = async
           return issueRepo.setFieldValue({ companyId, issueId: created.id, fieldName: name, value }, tx);
         };
         await setField(FIELD_TITLE, body.title);
-        await setField(FIELD_STATUS, body.status ?? DEFAULT_STATUS);
+        // 未帶 status 時落在該型別真正的起始狀態，不寫死中文字面值；
+        // checkExactlyOneInitialState 保證每個型別恆有一個 isInitial，
+        // DEFAULT_STATUS 只當資料異常時的防禦回退。
+        const workflowStates = await issueRepo.listWorkflowStates(companyId, context.issueType.id, tx);
+        const initialStatus = workflowStates.find((s) => s.isInitial)?.name ?? DEFAULT_STATUS;
+        await setField(FIELD_STATUS, body.status ?? initialStatus);
         if (body.assignee !== undefined && body.assignee !== '') {
           await setField(FIELD_ASSIGNEE, body.assignee);
         }

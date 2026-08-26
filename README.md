@@ -177,7 +177,8 @@
     - `validateStatusTransition`／`changeIssueStatus` 五項檢查皆已寫好且接進 workspace.ts：轉換合法性、角色、必填欄位、終止結案原因、結案原因合法性
     - workspace.ts 的角色查詢已補真實資料，issues.ts 泛用欄位路徑已擋 status／resolution，不再能繞過轉換規則
     - 管理介面已補：`WorkflowTransitionScreen`（路由 `/workflow`）左欄選工單型別，右側狀態／轉換／結案原因三區塊，可建立帶 `requiredRole`／`requiredFields` 的轉換規則
-    - 範圍縮減：狀態、轉換只做新增／移除，不做行內編輯表單（「編輯」走「先移除、再用新值新增」這條路徑）；起始狀態（`isInitial`）可透過「設為起始」按鈕改，但目前系統建工單的初始狀態仍寫死 `DEFAULT_STATUS = '待處理'`（workspace.ts），未讀取 `isInitial`，這塊留待需要時另開主題
+    - 範圍縮減：狀態、轉換只做新增／移除，不做行內編輯表單（「編輯」走「先移除、再用新值新增」這條路徑）
+    - 起始狀態（`isInitial`）已接進建工單邏輯：`POST /api/workspace/issues` 未帶 `status` 時查該型別實際的 `isInitial` 狀態落地，不再寫死 `DEFAULT_STATUS = '待處理'`（workspace.ts）；`DEFAULT_STATUS` 僅當資料異常查無起始狀態時的防禦回退
     - 已端到端驗證：補上本機 PostgreSQL 環境後跑滿整套整合測試（657 組），抓到並修掉三個先前被靜默略過測試掩蓋的真 bug——`replaceWorkflowStates`／`replaceWorkflowTransitions` 同交易內先刪 states 會撞外鍵（改 `workflow_transitions` 兩條 FK 為 `DEFERRABLE INITIALLY DEFERRED`，見 migration `003_defer_workflow_transition_fks.sql`）；`PUT /:id/workflow` 的 `states`／`resolutionOptions` 未依 wire schema 補上 `sortOrder`／`system` 就轉頭餵給 repo 層，導致整包替換必噴 500；Gantt 层級計算把「只有 Container 型別、無 Children 型別」誤判成「兩者皆缺」，第 1 層候選連帶交白卷
     - 已知殘留：`resolution_options` 資料表沒有排序欄位，`listResolutionOptions` 用 `ORDER BY value` 字母序回傳，不保證跟 `DEFAULT_RESOLUTIONS`／管理端送出的順序一致；要保序需另開主題補 `sort_order` 欄位（含 migration 與 API 契約變動），本輪未動
 - **view_layer：**

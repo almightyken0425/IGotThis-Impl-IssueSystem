@@ -114,6 +114,48 @@ suite('workspace routes', () => {
     expect(second.json().issue.due).toBe('2026-08-20');
   });
 
+  it('起始狀態改到別的狀態後，建工單落在新起始狀態，不寫死待處理', async () => {
+    const issueTypeId = (await call({ method: 'GET', url: '/api/workspace' })).json().issueType.id;
+    const workflow = (
+      await call({ method: 'GET', url: `/api/issue-types/${issueTypeId}/workflow` })
+    ).json();
+
+    await call({
+      method: 'PUT',
+      url: `/api/issue-types/${issueTypeId}/workflow`,
+      payload: {
+        states: workflow.states.map((s: { name: string; isTerminal: boolean }) => ({
+          name: s.name,
+          isInitial: s.name === '處理中',
+          isTerminal: s.isTerminal,
+        })),
+        transitions: workflow.transitions.map(
+          (t: {
+            fromState: string;
+            toState: string;
+            requiredRole: string | null;
+            requiredFields: readonly string[];
+          }) => ({
+            fromState: t.fromState,
+            toState: t.toState,
+            requiredRole: t.requiredRole,
+            requiredFields: t.requiredFields,
+          }),
+        ),
+        resolutionOptions: workflow.resolutionOptions.map((r: { value: string }) => ({
+          value: r.value,
+        })),
+      },
+    });
+
+    const created = await call({
+      method: 'POST',
+      url: '/api/workspace/issues',
+      payload: { title: '新起始狀態驗證' },
+    });
+    expect(created.json().issue.status).toBe('處理中');
+  });
+
   it('建立後在列表看得到', async () => {
     await call({ method: 'POST', url: '/api/workspace/issues', payload: { title: 'A' } });
     await call({ method: 'POST', url: '/api/workspace/issues', payload: { title: 'B' } });

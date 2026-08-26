@@ -15,6 +15,7 @@ import { KanbanScreen } from '../screens/KanbanScreen';
 import { ListScreen } from '../screens/ListScreen';
 import { LoginScreen } from '../screens/LoginScreen';
 import { TypeDefinitionScreen } from '../screens/TypeDefinitionScreen';
+import { WorkflowTransitionScreen } from '../screens/WorkflowTransitionScreen';
 import { AppShell } from './AppShell';
 
 export interface NavItem {
@@ -27,6 +28,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { path: '/kanban', label: '工單看板' },
   { path: '/dev-order', label: '開發順序表' },
   { path: '/types', label: '型別管理' },
+  { path: '/workflow', label: '流程轉換規則' },
 ];
 
 const DEFAULT_PATH = '/list';
@@ -47,6 +49,7 @@ export const router = createBrowserRouter([
           { path: 'kanban', element: <KanbanScreen /> },
           { path: 'dev-order', element: <DevOrderScreen /> },
           { path: 'types', element: <TypeDefinitionScreen /> },
+          { path: 'workflow', element: <WorkflowTransitionScreen /> },
           // 工單詳情頁：List/Kanban/DevOrder 三畫面點擊工單導覽至此，不掛側邊導覽列
           // （不進 NAV_ITEMS）——這是三畫面的下鑽頁，不是頂層導覽目的地。
           { path: 'issues/:issueId', element: <IssueDetailScreen /> },

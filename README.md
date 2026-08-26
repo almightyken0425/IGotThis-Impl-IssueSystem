@@ -2,8 +2,8 @@
 
 - 多產品開發團隊的 web 工單系統，開源自架免費，授權條款見 `LICENSE`
 - 本 repo 為 Module Impl git，module_id 為 `no1_issue_system`
-- 已完成地基層、引擎層、型別定義管理，應用層局部完成
-- workflow_engine 的流程編輯（updateWorkflowDefinition）尚無畫面消費，未實作
+- 已完成地基層、引擎層、型別定義管理、流程轉換規則管理，應用層局部完成
+- workflow_engine 的流程編輯（updateWorkflowDefinition）已有 domain／API／畫面三層：`WorkflowTransitionScreen` 管理狀態／轉換／結案原因，見待接事項的縮減範圍
 - 行為規格的仲裁端為對側 Module Spec git，視覺標準的仲裁端為對側 Module Design git
 
 ---
@@ -176,7 +176,9 @@
     - 狀態、轉換、結案原因的定義層 CRUD 已完成
     - `validateStatusTransition`／`changeIssueStatus` 五項檢查皆已寫好且接進 workspace.ts：轉換合法性、角色、必填欄位、終止結案原因、結案原因合法性
     - workspace.ts 的角色查詢已補真實資料，issues.ts 泛用欄位路徑已擋 status／resolution，不再能繞過轉換規則
-    - 目前沒有管理介面能建立帶 `requiredRole` 的轉換規則，歸在 web_shell 條目的型別維護與定義區管理介面待補範疇
+    - 管理介面已補：`WorkflowTransitionScreen`（路由 `/workflow`）左欄選工單型別，右側狀態／轉換／結案原因三區塊，可建立帶 `requiredRole`／`requiredFields` 的轉換規則
+    - 範圍縮減：狀態、轉換只做新增／移除，不做行內編輯表單（「編輯」走「先移除、再用新值新增」這條路徑）；起始狀態（`isInitial`）可透過「設為起始」按鈕改，但目前系統建工單的初始狀態仍寫死 `DEFAULT_STATUS = '待處理'`（workspace.ts），未讀取 `isInitial`，這塊留待需要時另開主題
+    - 未端到端驗證：本機無 PostgreSQL 連線環境（密碼未解），只驗過 typecheck／lint／11 組 domain 純函式測試與前端路由不崩潰；`issueTypes.test.ts` 新增的 6 組整合測試因無 `TEST_DATABASE_URL` 靜默略過，需要你有 DB 環境時跑 `npm test` 補驗
 - **view_layer：**
     - `resolveViewCalendar`／`computeIssueDuration`／`admitNewContainerIssue`／`applyViewFilter` 四個 domain 函式皆已接進 views.ts
     - 新單自動入表已完成，ListScreen 建單後自動 reload

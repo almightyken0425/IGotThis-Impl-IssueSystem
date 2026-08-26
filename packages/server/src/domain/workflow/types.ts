@@ -35,6 +35,24 @@ export interface WorkflowDefinition {
   readonly resolutionOptions: readonly ResolutionOptionValue[];
 }
 
+/**
+ * `updateWorkflowDefinition` 編輯用的狀態輸入，含 `isInitial`——
+ * `WorkflowStateSummary` 只服務轉換檢查，不含這個欄位，兩者職責不同不共用。
+ */
+export interface WorkflowStateEdit {
+  readonly name: string;
+  readonly isInitial: boolean;
+  readonly isTerminal: boolean;
+}
+
+/** `updateWorkflowDefinition` 編輯用的轉換輸入，形狀同 `WorkflowTransitionRule`，型別各自獨立以免耦合驗證與編輯兩種用途。 */
+export interface WorkflowTransitionEdit {
+  readonly fromState: string;
+  readonly toState: string;
+  readonly requiredRole: string | null;
+  readonly requiredFields: readonly string[];
+}
+
 /** 待檢查工單的摘要：現況狀態、目前已有值的欄位名稱清單。 */
 export interface IssueWorkflowSnapshot {
   readonly currentStatus: string;

@@ -9,7 +9,7 @@
 // disabled 依 variant 分流：實心降 opacity、有框退框、無框只換字色。
 
 import { useInsertionEffect, useState } from 'react';
-import type { CSSProperties, MouseEventHandler, ReactNode } from 'react';
+import type { ButtonHTMLAttributes, CSSProperties, MouseEventHandler, ReactNode } from 'react';
 
 import {
   BUTTON_TOKENS,
@@ -82,6 +82,7 @@ export interface ButtonProps {
   readonly disabled?: boolean;
   /** 撐滿容器寬。 */
   readonly fullWidth?: boolean;
+  readonly type?: ButtonHTMLAttributes<HTMLButtonElement>['type'];
   readonly onClick?: MouseEventHandler<HTMLButtonElement>;
   readonly style?: CSSProperties;
 }
@@ -95,6 +96,7 @@ export function Button({
   loading = false,
   disabled = false,
   fullWidth = false,
+  type = 'button',
   onClick,
   style,
 }: ButtonProps) {
@@ -122,7 +124,7 @@ export function Button({
 
   return (
     <button
-      type="button"
+      type={type}
       onClick={off ? undefined : onClick}
       disabled={off}
       onMouseEnter={() => setHover(true)}

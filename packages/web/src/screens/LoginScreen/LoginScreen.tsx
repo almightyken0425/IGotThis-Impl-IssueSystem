@@ -164,6 +164,7 @@ export function LoginScreen() {
         )}
 
         <Button
+          type="submit"
           variant="primary"
           fullWidth
           loading={submitting}

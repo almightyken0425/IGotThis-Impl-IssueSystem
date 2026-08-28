@@ -8,8 +8,9 @@
 //
 // 與 design 的差異兩處，皆因 canvas 與 app 的容器不同：
 //   - BASE_WIDTH 不搬。canvas 需要固定寬 artboard，app 內畫面吃 AppShell 的剩餘寬
-//   - COLUMN_PANEL_* 為 impl 新增。design 的欄位顯示設定只到「按鈕有 active 態」，
-//     app 要真的能開合面板，故補一組面板幾何，值同樣由既有階梯組出
+//   - COLUMN_PANEL_*／FILTER_PANEL_* 為 impl 新增。design 的欄位顯示設定與篩選
+//     面板互動只定案到行為層級（見 AGENTS.md「設計待辦」），app 要真的能開合
+//     面板，故補一組面板幾何，值同樣由既有階梯組出
 
 import {
   BORDER_WIDTH,
@@ -54,4 +55,16 @@ export const LIST_SCREEN_TOKENS = {
   COLUMN_PANEL_HINT_TYPE: TYPE_STYLES.caption,
   COLUMN_PANEL_Z: 4, // (literal: 疊層序，面板蓋過工具列與表格)
   COLUMN_PANEL_WIDTH_STEP: SPACING.lg, // 16px，寬度增減鈕每次調整量
+
+  // ─── 篩選面板（impl 新增，比照 COLUMN_PANEL_* 幾何）───
+  FILTER_PANEL_WIDTH: SPACING['3xl'] * 9, // 360，容一列欄位下拉＋值輸入＋移除鈕
+  FILTER_PANEL_PADDING: SPACING.sm,
+  FILTER_PANEL_GAP: SPACING.sm,
+  FILTER_PANEL_ROW_GAP: SPACING.xs,
+  FILTER_PANEL_OFFSET: SPACING.xs,
+  FILTER_PANEL_RADIUS: RADIUS.md,
+  FILTER_PANEL_BORDER_WIDTH: BORDER_WIDTH.hairline,
+  FILTER_PANEL_TITLE_TYPE: TYPE_STYLES.overline,
+  FILTER_PANEL_HINT_TYPE: TYPE_STYLES.caption,
+  FILTER_PANEL_Z: 4,
 } as const;

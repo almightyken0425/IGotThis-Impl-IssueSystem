@@ -25,10 +25,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 
-import { ApiError, viewsApi, workspaceApi } from '../../api';
+import { ApiError, fieldsApi, viewsApi, workspaceApi } from '../../api';
 import type { WorkspaceContext, WorkspaceIssue } from '../../api';
 import { useCurrentView } from '../../app/CurrentViewContext';
 import { Button, Checkbox, Chip, IconButton, Select, TextInput } from '../../components/controls';
+import type { SelectOption } from '../../components/controls';
 import { DataTable, EmptyState, FilterNotice } from '../../components/data';
 import type {
   DueTone,
@@ -59,6 +60,15 @@ import {
   toggleColumnEntry,
 } from './columnConfig';
 import type { ColumnConfigEntry } from './columnConfig';
+import {
+  addFilterConditionRow,
+  buildFilterConfig,
+  filterFieldOptions,
+  parseFilterConditionRows,
+  removeFilterConditionRow,
+  updateFilterConditionRow,
+} from './filterConfig';
+import type { FilterConditionRow } from './filterConfig';
 import {
   LIST_COLUMNS,
   LIST_DEFAULT_SORT,
@@ -224,9 +234,8 @@ function ViewTitle({ theme, name, count }: ViewTitleProps) {
 // 已套用篩選條件列，design 定案：唯讀標籤，條件本身要改走「篩選」入口，
 // 互動清單沒有「在條件列上直接移除」。條件為空時不渲染本列。
 //
-// filterConfig 目前沒有任何寫入路徑（篩選面板本身 design 未定案，見「篩選」
-// 按鈕 onClick 待補），故實務上多半是空的；解析邏輯先備妥，等面板接上寫入
-// 後這裡不用再動。
+// 寫入路徑見下方 FilterPanel；本列只管讀取展示，兩者共用同一份
+// currentView.filterConfig，FilterPanel 套用成功後這裡自動反映。
 
 function fieldLabel(fieldName: string): string {
   return LIST_COLUMNS.find((c) => c.key === fieldName)?.label ?? fieldName;
@@ -263,6 +272,107 @@ function FilterChipBar({ chips }: FilterChipBarProps) {
       {chips.map((chip) => (
         <Chip key={`${chip.label}-${chip.value}`} label={chip.label} value={chip.value} />
       ))}
+    </div>
+  );
+}
+
+// ─── FilterPanel ── 篩選條件編輯面板
+// design 定案：比照 ColumnConfigPanel 模式（見 AGENTS.md「設計待辦」），錨定
+// 「篩選」按鈕下方、點外部收合；量體本身屬 impl 自訂範圍。後端 FilterCondition
+// 只認 equals、多條件全 AND，面板不呈現不存在的運算子選項。
+
+interface FilterPanelProps {
+  readonly theme: Theme;
+  readonly rows: readonly FilterConditionRow[];
+  readonly fieldOptions: readonly SelectOption[];
+  readonly fieldOptionsLoading: boolean;
+  readonly error: string | undefined;
+  readonly saving: boolean;
+  readonly onFieldChange: (id: string, fieldName: string) => void;
+  readonly onValueChange: (id: string, value: string) => void;
+  readonly onRemoveRow: (id: string) => void;
+  readonly onAddRow: () => void;
+  readonly onApply: () => void;
+  readonly onCancel: () => void;
+}
+
+function FilterPanel({
+  theme,
+  rows,
+  fieldOptions,
+  fieldOptionsLoading,
+  error,
+  saving,
+  onFieldChange,
+  onValueChange,
+  onRemoveRow,
+  onAddRow,
+  onApply,
+  onCancel,
+}: FilterPanelProps) {
+  return (
+    <div
+      role="group"
+      aria-label="篩選條件"
+      style={{
+        position: 'absolute',
+        top: `calc(100% + ${T.FILTER_PANEL_OFFSET}px)`,
+        right: 0,
+        zIndex: T.FILTER_PANEL_Z,
+        width: T.FILTER_PANEL_WIDTH,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: T.FILTER_PANEL_GAP,
+        padding: T.FILTER_PANEL_PADDING,
+        background: theme.bg.surface,
+        border: `${T.FILTER_PANEL_BORDER_WIDTH}px solid ${theme.border.base}`,
+        borderRadius: T.FILTER_PANEL_RADIUS,
+        boxShadow: controlShadow(theme, 'level2'),
+        fontFamily: FONT_FAMILY.base,
+      }}
+    >
+      <span style={{ ...typeStyle(T.FILTER_PANEL_TITLE_TYPE), color: theme.text.secondary }}>
+        篩選條件
+      </span>
+
+      {rows.length === 0 && (
+        <span style={{ ...typeStyle(T.FILTER_PANEL_HINT_TYPE), color: theme.text.tertiary }}>
+          尚無條件，點下方新增
+        </span>
+      )}
+
+      {rows.map((row) => (
+        <div key={row.id} style={{ display: 'flex', alignItems: 'center', gap: T.FILTER_PANEL_ROW_GAP }}>
+          <Select
+            options={fieldOptions}
+            value={row.fieldName}
+            placeholder={fieldOptionsLoading ? '載入中…' : '選欄位'}
+            disabled={fieldOptionsLoading}
+            onChange={(fieldName) => onFieldChange(row.id, fieldName)}
+            style={{ flex: 1, minWidth: 0 }}
+          />
+          <TextInput
+            value={row.value}
+            placeholder="值"
+            onChange={(value) => onValueChange(row.id, value)}
+            style={{ flex: 1, minWidth: 0 }}
+          />
+          <IconButton icon="x" title="移除條件" size="sm" onClick={() => onRemoveRow(row.id)} />
+        </div>
+      ))}
+
+      <Button variant="ghost" iconLeft="plus" label="新增條件" onClick={onAddRow} />
+
+      {error !== undefined && (
+        <span style={{ ...typeStyle(T.FILTER_PANEL_HINT_TYPE), color: theme.status.error_fg }}>
+          {error}
+        </span>
+      )}
+
+      <div style={{ display: 'flex', gap: T.FILTER_PANEL_ROW_GAP, justifyContent: 'flex-end' }}>
+        <Button variant="ghost" label="取消" onClick={onCancel} disabled={saving} />
+        <Button variant="primary" label="套用" onClick={onApply} disabled={saving} />
+      </div>
     </div>
   );
 }
@@ -517,6 +627,73 @@ export function ListScreen() {
     return () => document.removeEventListener('pointerdown', onPointerDown);
   }, [columnPanelOpen]);
 
+  // 篩選面板：草稿與 currentView.filterConfig 脫鉤，開面板時才由目前條件初始化，
+  // 「套用」才寫回；跟欄位顯示設定的樂觀即時寫回是兩種互動，不能共用同一套邏輯
+  // ——欄位顯示設定每動一下就存，篩選要讓使用者組完整組條件才送出。
+  const [filterPanelOpen, setFilterPanelOpen] = useState(false);
+  const [filterRows, setFilterRows] = useState<readonly FilterConditionRow[]>([]);
+  const [filterSaving, setFilterSaving] = useState(false);
+  const [filterError, setFilterError] = useState<string | undefined>(undefined);
+  const filterRowSeq = useRef(0);
+  const filterPanelAnchor = useRef<HTMLDivElement | null>(null);
+
+  const fieldDefsFetcher = useCallback(() => fieldsApi.listFieldDefs(), []);
+  const { data: fieldDefs, loading: fieldDefsLoading } = useAsync(fieldDefsFetcher);
+  const fieldOptions = useMemo(() => filterFieldOptions(fieldDefs ?? []), [fieldDefs]);
+
+  useEffect(() => {
+    if (!filterPanelOpen) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const anchor = filterPanelAnchor.current;
+      if (anchor !== null && event.target instanceof Node && anchor.contains(event.target)) return;
+      setFilterPanelOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [filterPanelOpen]);
+
+  const openFilterPanel = useCallback(() => {
+    setFilterRows(parseFilterConditionRows(currentView?.filterConfig));
+    setFilterError(undefined);
+    setFilterPanelOpen(true);
+  }, [currentView?.filterConfig]);
+
+  const addFilterRow = useCallback(() => {
+    filterRowSeq.current += 1;
+    setFilterRows((rows) => addFilterConditionRow(rows, `new-${filterRowSeq.current}`));
+  }, []);
+
+  const removeFilterRow = useCallback((id: string) => {
+    setFilterRows((rows) => removeFilterConditionRow(rows, id));
+  }, []);
+
+  const changeFilterField = useCallback((id: string, fieldName: string) => {
+    setFilterRows((rows) => updateFilterConditionRow(rows, id, { fieldName }));
+  }, []);
+
+  const changeFilterValue = useCallback((id: string, value: string) => {
+    setFilterRows((rows) => updateFilterConditionRow(rows, id, { value }));
+  }, []);
+
+  const applyFilter = useCallback(async () => {
+    if (currentView === null) return;
+    setFilterSaving(true);
+    setFilterError(undefined);
+    try {
+      await updateView(currentView.id, { filterConfig: buildFilterConfig(filterRows) });
+      await reload();
+      setFilterPanelOpen(false);
+    } catch (err: unknown) {
+      setFilterError(err instanceof ApiError ? err.message : '套用篩選失敗');
+    } finally {
+      setFilterSaving(false);
+    }
+  }, [currentView, filterRows, updateView, reload]);
+
+  const cancelFilterPanel = useCallback(() => {
+    setFilterPanelOpen(false);
+  }, []);
+
   const statusMeta = useMemo(
     () => buildStatusMeta(data?.context.statuses ?? []),
     [data?.context.statuses],
@@ -639,8 +816,31 @@ export function ListScreen() {
         label="建立工單"
         onClick={() => setCreateOpen((open) => !open)}
       />
-      {/* 篩選面板本身互動 design 未定案，入口按鈕先備位，onClick 待面板定案後補。 */}
-      <Button variant="secondary" iconLeft="filter" label="篩選" disabled />
+      <div ref={filterPanelAnchor} style={{ position: 'relative', display: 'inline-flex' }}>
+        <Button
+          variant="secondary"
+          iconLeft="filter"
+          label="篩選"
+          disabled={currentView === null}
+          onClick={() => (filterPanelOpen ? setFilterPanelOpen(false) : openFilterPanel())}
+        />
+        {filterPanelOpen && (
+          <FilterPanel
+            theme={theme}
+            rows={filterRows}
+            fieldOptions={fieldOptions}
+            fieldOptionsLoading={fieldDefsLoading}
+            error={filterError}
+            saving={filterSaving}
+            onFieldChange={changeFilterField}
+            onValueChange={changeFilterValue}
+            onRemoveRow={removeFilterRow}
+            onAddRow={addFilterRow}
+            onApply={() => void applyFilter()}
+            onCancel={cancelFilterPanel}
+          />
+        )}
+      </div>
       <Select
         prefix="排序"
         options={LIST_SORT_OPTIONS}

@@ -37,5 +37,29 @@ export function applyViewFilter(
 }
 
 function matches(issue: IssueFilterCandidate, condition: FilterCondition): boolean {
-  return issue.fields[condition.fieldName] === condition.value;
+  return scalarEquals(issue.fields[condition.fieldName], condition.value);
+}
+
+function scalarEquals(left: unknown, right: unknown): boolean {
+  if (left === right) {
+    return true;
+  }
+
+  if (typeof left === 'number' && typeof right === 'string') {
+    return Number.isFinite(left) && String(left) === right;
+  }
+
+  if (typeof right === 'number' && typeof left === 'string') {
+    return Number.isFinite(right) && left === String(right);
+  }
+
+  if (typeof left === 'boolean' && typeof right === 'string') {
+    return String(left) === right;
+  }
+
+  if (typeof right === 'boolean' && typeof left === 'string') {
+    return left === String(right);
+  }
+
+  return false;
 }

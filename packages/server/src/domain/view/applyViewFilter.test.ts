@@ -36,6 +36,97 @@ describe('applyViewFilter', () => {
     expect(result.excludedIds).toEqual(['b']);
   });
 
+  it('數字欄位接受相同數字的文字條件', () => {
+    const issues: readonly IssueFilterCandidate[] = [
+      { issueId: 'n', fields: { point: 3 } },
+    ];
+    const config: FilterConfig = {
+      conditions: [{ fieldName: 'point', operator: 'equals', value: '3' }],
+    };
+
+    const result = applyViewFilter(issues, config);
+
+    expect(result.included.map((issue) => issue.issueId)).toEqual(['n']);
+  });
+
+  it('布林欄位接受相同布林值的文字條件', () => {
+    const issues: readonly IssueFilterCandidate[] = [
+      { issueId: 'b', fields: { blocked: false } },
+    ];
+    const config: FilterConfig = {
+      conditions: [{ fieldName: 'blocked', operator: 'equals', value: 'false' }],
+    };
+
+    const result = applyViewFilter(issues, config);
+
+    expect(result.included.map((issue) => issue.issueId)).toEqual(['b']);
+  });
+
+  it('文字欄位接受相同數字的數值條件', () => {
+    const issues: readonly IssueFilterCandidate[] = [
+      { issueId: 's', fields: { estimate: '3' } },
+    ];
+    const config: FilterConfig = {
+      conditions: [{ fieldName: 'estimate', operator: 'equals', value: 3 }],
+    };
+
+    const result = applyViewFilter(issues, config);
+
+    expect(result.included.map((issue) => issue.issueId)).toEqual(['s']);
+  });
+
+  it('文字欄位接受相同布林值的布林條件', () => {
+    const issues: readonly IssueFilterCandidate[] = [
+      { issueId: 's', fields: { blocked: 'false' } },
+    ];
+    const config: FilterConfig = {
+      conditions: [{ fieldName: 'blocked', operator: 'equals', value: false }],
+    };
+
+    const result = applyViewFilter(issues, config);
+
+    expect(result.included.map((issue) => issue.issueId)).toEqual(['s']);
+  });
+
+  it('數字文字必須是標準表示，前置零不視為相等', () => {
+    const issues: readonly IssueFilterCandidate[] = [
+      { issueId: 'n', fields: { point: 3 } },
+    ];
+    const config: FilterConfig = {
+      conditions: [{ fieldName: 'point', operator: 'equals', value: '03' }],
+    };
+
+    const result = applyViewFilter(issues, config);
+
+    expect(result.included).toEqual([]);
+  });
+
+  it('布林文字區分大小寫', () => {
+    const issues: readonly IssueFilterCandidate[] = [
+      { issueId: 'b', fields: { blocked: false } },
+    ];
+    const config: FilterConfig = {
+      conditions: [{ fieldName: 'blocked', operator: 'equals', value: 'FALSE' }],
+    };
+
+    const result = applyViewFilter(issues, config);
+
+    expect(result.included).toEqual([]);
+  });
+
+  it('物件欄位不以字串化結果比較', () => {
+    const issues: readonly IssueFilterCandidate[] = [
+      { issueId: 'o', fields: { metadata: { priority: 1 } } },
+    ];
+    const config: FilterConfig = {
+      conditions: [{ fieldName: 'metadata', operator: 'equals', value: '[object Object]' }],
+    };
+
+    const result = applyViewFilter(issues, config);
+
+    expect(result.included).toEqual([]);
+  });
+
   it('多條件 AND：須全部符合才保留', () => {
     const config: FilterConfig = {
       conditions: [

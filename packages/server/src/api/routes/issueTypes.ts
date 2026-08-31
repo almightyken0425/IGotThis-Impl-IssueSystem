@@ -244,9 +244,11 @@ export const issueTypeRoutes: FastifyPluginAsync<IssueTypeRoutesOptions> = async
         ...s,
         sortOrder: index,
       }));
-      // wire 上的 resolutionOptions 不含 system，整包替換一律視為使用者自訂。
-      const resolutionOptionsWithSystem = request.body.resolutionOptions.map((r) => ({
+      // wire 上的 resolutionOptions 不含 sortOrder／system：順序即 sortOrder，
+      // 依陣列位置換算；整包替換一律視為使用者自訂，system 固定 false。
+      const resolutionOptionsWithSystem = request.body.resolutionOptions.map((r, index) => ({
         ...r,
+        sortOrder: index + 1,
         system: false,
       }));
 

@@ -192,6 +192,12 @@
 - **web_shell：**
     - 工單詳情頁已補（`IssueDetailScreen`）：欄位／關聯／異動歷史三區，List／Kanban／DevOrder 三處入口可導覽進入
     - 工單詳情頁的欄位編輯已對齊 design 定案：非唯讀欄位一律可編輯，不分值型別。白名單四欄位 title/assignee/point/due 走 workspace.ts PATCH，其餘含自訂欄位走 issues.ts 泛用路徑，兩條都已記變更歷史
-    - 型別維護與定義區管理介面待補
+    - 型別維護與定義區管理介面已補
+        - `TypeDefinitionScreen` 掛載於 `/types`
+        - 欄位組支援建立、列出與刪除
+        - 欄位定義支援完整 CRUD
+        - 工單型別支援建立與列出
+        - 工單型別可編輯欄位組配方
+        - `/types` 與 `/workflow` 皆有側邊選單入口
     - 登入頁已對齊 design 定案畫面（`LoginScreen` 逐名對齊 `no7_login_screen`）
     - 主題選擇已接持久化，存瀏覽器 localStorage，不跟帳號走，換裝置需重新選一次

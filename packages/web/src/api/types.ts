@@ -59,6 +59,8 @@ export interface WorkspaceIssue {
 
 /** 建立工單的輸入。 */
 export interface CreateIssueInput {
+  readonly issueSetId?: string;
+  readonly issueTypeId?: string;
   readonly title: string;
   readonly status?: string;
   readonly assignee?: string;
@@ -98,6 +100,40 @@ export interface Mgmt {
   readonly productId: string;
   readonly name: string;
   readonly containerIssueSetId: string;
+}
+
+export interface IssueSet {
+  readonly id: string;
+  readonly companyId: string;
+  readonly mgmtId: string;
+  readonly name: string;
+  readonly key: string;
+}
+
+export interface OrganizationMgmt extends Mgmt {
+  readonly canStructure: boolean;
+  readonly issueSets: readonly IssueSet[];
+}
+
+export interface OrganizationProduct extends Product {
+  readonly canStructure: boolean;
+  readonly mgmts: readonly OrganizationMgmt[];
+}
+
+export interface OrganizationTeam extends Team {
+  readonly products: readonly OrganizationProduct[];
+}
+
+export interface Organization {
+  readonly id: string;
+  readonly name: string;
+  readonly orgAdmin: boolean;
+  readonly teams: readonly OrganizationTeam[];
+}
+
+export interface IssueCreationOptions {
+  readonly issueSets: readonly { readonly id: string; readonly label: string; readonly key: string }[];
+  readonly issueTypes: readonly IssueTypeDefinition[];
 }
 
 /** 檢視。對齊 viewRepo 的 View。 */

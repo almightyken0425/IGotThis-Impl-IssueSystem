@@ -5,6 +5,7 @@
 import { apiFetch } from './client';
 import type {
   CreateIssueInput,
+  IssueCreationOptions,
   UpdateIssueInput,
   WorkspaceContext,
   WorkspaceIssue,
@@ -13,6 +14,10 @@ import type {
 /** 啟動工作區並取脈絡（工單集、型別、流程狀態）；冪等。 */
 export async function getWorkspace(): Promise<WorkspaceContext> {
   return apiFetch<WorkspaceContext>('/api/workspace');
+}
+
+export function getCreationOptions(viewId: string): Promise<IssueCreationOptions> {
+  return apiFetch(`/api/workspace/creation-options?viewId=${encodeURIComponent(viewId)}`);
 }
 
 /** 列出工作區工單集下的加值工單列。 */

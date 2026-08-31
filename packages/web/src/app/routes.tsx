@@ -9,6 +9,7 @@
 import { createBrowserRouter, Navigate } from 'react-router';
 
 import { RequireAuth } from '../auth/RequireAuth';
+import { ContainerManagementScreen } from '../screens/ContainerManagementScreen';
 import { DevOrderScreen } from '../screens/DevOrderScreen';
 import { IssueDetailScreen } from '../screens/IssueDetailScreen';
 import { KanbanScreen } from '../screens/KanbanScreen';
@@ -29,6 +30,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { path: '/dev-order', label: '開發順序表' },
   { path: '/types', label: '型別管理' },
   { path: '/workflow', label: '流程轉換規則' },
+  { path: '/organization', label: '組織管理' },
 ];
 
 const DEFAULT_PATH = '/list';
@@ -50,6 +52,7 @@ export const router = createBrowserRouter([
           { path: 'dev-order', element: <DevOrderScreen /> },
           { path: 'types', element: <TypeDefinitionScreen /> },
           { path: 'workflow', element: <WorkflowTransitionScreen /> },
+          { path: 'organization', element: <ContainerManagementScreen /> },
           // 工單詳情頁：List/Kanban/DevOrder 三畫面點擊工單導覽至此，不掛側邊導覽列
           // （不進 NAV_ITEMS）——這是三畫面的下鑽頁，不是頂層導覽目的地。
           { path: 'issues/:issueId', element: <IssueDetailScreen /> },

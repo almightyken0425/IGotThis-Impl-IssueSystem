@@ -1,10 +1,7 @@
-// 容器骨架 API · /api/teams、/api/products、/api/mgmts 之下的唯讀查詢
-//
-// 供新增檢視表單的組織範圍選擇器使用。這輪只需要唯讀列出，
-// Team/Product/Mgmt 的建立與改名不在此輪範圍內，不封裝。
+// 組織讀取、建立與改名。
 
 import { apiFetch } from './client';
-import type { Mgmt, Product, Team } from './types';
+import type { IssueSet, Mgmt, Organization, Product, Team } from './types';
 
 export async function listTeams(): Promise<readonly Team[]> {
   const res = await apiFetch<{ teams: readonly Team[] }>('/api/teams');
@@ -19,4 +16,31 @@ export async function listProductsByTeam(teamId: string): Promise<readonly Produ
 export async function listMgmtsByProduct(productId: string): Promise<readonly Mgmt[]> {
   const res = await apiFetch<{ mgmts: readonly Mgmt[] }>(`/api/products/${productId}/mgmts`);
   return res.mgmts;
+}
+
+export function getOrganization(): Promise<Organization> {
+  return apiFetch('/api/organization');
+}
+
+export async function createTeam(name: string): Promise<Team> {
+  return (await apiFetch<{ team: Team }>('/api/teams', { method: 'POST', body: { name } })).team;
+}
+
+export async function createProduct(teamId: string, name: string): Promise<Product> {
+  return (await apiFetch<{ product: Product }>('/api/products', { method: 'POST', body: { teamId, name } })).product;
+}
+
+export function createMgmt(productId: string, name: string, issueSet: { name: string; key: string }): Promise<{ mgmt: Mgmt; issueSet: IssueSet }> {
+  return apiFetch(`/api/products/${productId}/mgmts`, { method: 'POST', body: { name, issueSet } });
+}
+
+export async function createIssueSet(mgmtId: string, name: string, key: string): Promise<IssueSet> {
+  return (await apiFetch<{ issueSet: IssueSet }>(`/api/mgmts/${mgmtId}/issue-sets`, { method: 'POST', body: { name, key } })).issueSet;
+}
+
+export type ContainerKind = 'team' | 'product' | 'mgmt' | 'issueSet';
+const CONTAINER_PATHS = { team: 'teams', product: 'products', mgmt: 'mgmts', issueSet: 'issue-sets' } as const;
+
+export async function renameContainer(kind: ContainerKind, id: string, name: string): Promise<void> {
+  await apiFetch(`/api/${CONTAINER_PATHS[kind]}/${id}`, { method: 'PATCH', body: { name } });
 }

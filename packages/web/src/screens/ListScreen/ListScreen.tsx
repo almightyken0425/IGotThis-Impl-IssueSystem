@@ -11,9 +11,6 @@
 // 檢視層級）。無當前檢視（帳號名下尚無檢視）時顯示空狀態，不發請求。原 design
 // 的 variant 與假資料不搬——狀態差異由真實資料與互動產生。
 //
-// 已知限制：建立工單（submitCreate）寫入的是「工作區預設工單集」，不是當前
-// 檢視的資料來源；詳見 submitCreate 上方註解。
-//
 // 消費元件：
 //   gantt/Toolbar、controls（Select / Button / IconButton / Checkbox / TextInput）、
 //   data（DataTable / EmptyState）。
@@ -26,7 +23,7 @@ import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 
 import { ApiError, fieldsApi, viewsApi, workspaceApi } from '../../api';
-import type { WorkspaceContext, WorkspaceIssue } from '../../api';
+import type { CreateIssueInput, WorkspaceContext, WorkspaceIssue } from '../../api';
 import { useCurrentView } from '../../app/CurrentViewContext';
 import { Button, Checkbox, Chip, IconButton, Select, TextInput } from '../../components/controls';
 import type { SelectOption } from '../../components/controls';
@@ -507,32 +504,37 @@ function ColumnConfigPanel({
 }
 
 // ─── CreateIssueBar ── 建立工單的行內入口
-// design 尚無定案的建立表單；impl 補最小可用形：標題輸入 + 送出，成功即回列表。
+// 建單選項依當前檢視與管理域權限提供。
 
 interface CreateIssueBarProps {
   readonly theme: Theme;
+  readonly viewId: string;
   readonly submitting: boolean;
   readonly error: string | undefined;
-  readonly onSubmit: (title: string) => void;
+  readonly onSubmit: (input: CreateIssueInput) => void;
   readonly onCancel: () => void;
 }
 
-function CreateIssueBar({ theme, submitting, error, onSubmit, onCancel }: CreateIssueBarProps) {
+function CreateIssueBar({ theme, viewId, submitting, error, onSubmit, onCancel }: CreateIssueBarProps) {
   const [title, setTitle] = useState('');
+  const [selectedSet, setSelectedSet] = useState('');
+  const [selectedType, setSelectedType] = useState('');
+  const fetcher = useCallback(() => workspaceApi.getCreationOptions(viewId), [viewId]);
+  const options = useAsync(fetcher);
+  const issueSets = options.data?.issueSets ?? [];
+  const issueTypes = options.data?.issueTypes ?? [];
+  const issueSetId = selectedSet || (issueSets.length === 1 ? issueSets[0]?.id ?? '' : '');
+  const issueTypeId = selectedType || issueTypes.find(type => type.name === 'task')?.id || issueTypes[0]?.id || '';
+  const valid = title.trim() !== '' && issueSets.some(set => set.id === issueSetId) && issueTypes.some(type => type.id === issueTypeId) && !options.loading && !options.error;
   const submit = () => {
-    const trimmed = title.trim();
-    if (trimmed === '') return;
-    onSubmit(trimmed);
-    setTitle('');
+    if (!valid || submitting) return;
+    onSubmit({ title: title.trim(), issueSetId, issueTypeId });
   };
   return (
-    <div
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' && !submitting) submit();
-      }}
+    <form aria-label="建立工單" onSubmit={event => { event.preventDefault(); submit(); }}
       style={{
         display: 'flex',
-        alignItems: 'center',
+        flexDirection: 'column',
         gap: SPACING.sm,
         padding: SPACING.sm,
         background: theme.bg.surface,
@@ -540,20 +542,33 @@ function CreateIssueBar({ theme, submitting, error, onSubmit, onCancel }: Create
         borderRadius: T.COLUMN_PANEL_RADIUS,
       }}
     >
+      {options.loading && <div role="status">載入建單選項…</div>}
+      {options.error && <div role="alert">{options.error}<Button label="重試" onClick={() => void options.reload()} /></div>}
+      {!options.loading && !options.error && issueSets.length === 0 && <div role="status">此檢視沒有可建立工單的範圍。請確認資料來源與建單權限。</div>}
+      <Select prefix="工單集" fullWidth placeholder="請選擇工單集" value={issueSetId} onChange={setSelectedSet}
+        options={issueSets.map(set => ({ value: set.id, label: set.label }))} disabled={submitting || options.loading || issueSets.length === 0} />
+      <Select prefix="工單型別" fullWidth value={issueTypeId} onChange={setSelectedType}
+        options={issueTypes.map(type => ({ value: type.id, label: type.label }))} disabled={submitting || options.loading || issueTypes.length === 0} />
+      <label>標題
       <TextInput
         leadingIcon="plus"
         placeholder="輸入工單標題後按 Enter 建立"
         value={title}
         onChange={setTitle}
+        disabled={submitting}
+        clearable={false}
         fullWidth
         style={{ flex: 1 }}
       />
-      <Button variant="primary" label="建立" loading={submitting} onClick={submit} />
-      <Button variant="ghost" label="取消" onClick={onCancel} />
+      </label>
+      <div style={{ display: 'flex', gap: SPACING.sm }}>
+      <Button type="submit" variant="primary" label="建立" loading={submitting} disabled={!valid} />
+      <Button variant="ghost" label="取消" disabled={submitting} onClick={onCancel} />
+      </div>
       {error !== undefined && (
-        <span style={{ ...typeStyle(T.VIEW_META_TYPE), color: theme.status.error_fg }}>{error}</span>
+        <span role="alert" style={{ ...typeStyle(T.VIEW_META_TYPE), color: theme.status.error_fg }}>{error}</span>
       )}
-    </div>
+    </form>
   );
 }
 
@@ -614,6 +629,8 @@ export function ListScreen() {
   useEffect(() => {
     setColumnConfigDraft(parseColumnConfig(currentView?.columnConfig, LIST_COLUMNS));
     setSaveError(undefined);
+    setCreateOpen(false);
+    setCreateError(undefined);
   }, [currentView?.id]);
 
   useEffect(() => {
@@ -782,17 +799,12 @@ export function ListScreen() {
   const effectiveGroupBy =
     groupBy !== LIST_GROUP_NONE && visibleColumnKeys.has(groupBy) ? groupBy : undefined;
 
-  // 已知限制：寫入的是「工作區預設工單集」（ensureWorkspace 決定的單一
-  // IssueSet），不是 currentView.sourceMgmtIds 指向的任意資料來源。目前前端
-  // 沒有建立額外 Team/Product/Mgmt 的入口（containers.ts 只封裝唯讀查詢），
-  // 每個 Company 只有一顆預設 Mgmt，新增檢視的組織範圍選擇必然以它為 scope，
-  // 兩者恆一致，這個邊界目前不可觸發。等前端開放建立多個 Mgmt 時需重新檢視。
   const submitCreate = useCallback(
-    async (title: string) => {
+    async (input: CreateIssueInput) => {
       setCreating(true);
       setCreateError(undefined);
       try {
-        await workspaceApi.createIssue({ title });
+        await workspaceApi.createIssue(input);
         await reload();
         setCreateOpen(false);
       } catch (err: unknown) {
@@ -814,6 +826,7 @@ export function ListScreen() {
         variant="primary"
         iconLeft="plus"
         label="建立工單"
+        disabled={currentView === null || creating}
         onClick={() => setCreateOpen((open) => !open)}
       />
       <div ref={filterPanelAnchor} style={{ position: 'relative', display: 'inline-flex' }}>
@@ -899,12 +912,14 @@ export function ListScreen() {
 
         <FilterNotice count={data?.permissionExcludedCount} />
 
-        {createOpen && (
+        {createOpen && currentView !== null && (
           <CreateIssueBar
+            key={currentView.id}
+            viewId={currentView.id}
             theme={theme}
             submitting={creating}
             error={createError}
-            onSubmit={(title) => void submitCreate(title)}
+            onSubmit={(input) => void submitCreate(input)}
             onCancel={() => {
               setCreateOpen(false);
               setCreateError(undefined);

@@ -38,6 +38,7 @@ suite('issue routes', () => {
     await pool.query('TRUNCATE companies CASCADE');
     session = await registerSession(app);
     call = authed(app, session.cookie);
+    await call({ method: 'GET', url: '/api/workspace' });
 
     // 容器骨架走真路由：team > product > mgmt + 初始工單集。
     const team = await call({ method: 'POST', url: '/api/teams', payload: { name: 'T' } });
@@ -68,9 +69,9 @@ suite('issue routes', () => {
     const { companyId } = session;
     await pool.query(
       'INSERT INTO issue_type_definitions (id, company_id, name, label, field_sets, system) VALUES ($1,$2,$3,$4,$5,$6)',
-      [issueTypeId, companyId, 'task', 'Task', JSON.stringify(['基本']), false],
+      [issueTypeId, companyId, 'test-task', 'Task', JSON.stringify(['基本']), false],
     );
-    await pool.query('INSERT INTO field_set_defs (company_id, name, system) VALUES ($1,$2,$3)', [
+    await pool.query('INSERT INTO field_set_defs (company_id, name, system) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', [
       companyId,
       '基本',
       true,
@@ -78,7 +79,7 @@ suite('issue routes', () => {
     await pool.query(
       `INSERT INTO field_defs
          (company_id, name, field_set_name, kind, value_type, system, readonly, rollupable, rollup_fn, tracked, label)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT DO NOTHING`,
       [companyId, FIELD_NAME, '基本', 'single', 'text', false, false, false, null, false, '標題'],
     );
     // ChangeLog 系統欄位定義：appendChangeLog 寫入時 field_name 固定用這個常數，
@@ -87,7 +88,7 @@ suite('issue routes', () => {
     await pool.query(
       `INSERT INTO field_defs
          (company_id, name, field_set_name, kind, value_type, system, readonly, rollupable, rollup_fn, tracked, label)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT DO NOTHING`,
       [companyId, fieldRepo.CHANGE_LOG_FIELD_NAME, '基本', 'multi', 'text', true, true, false, null, false, '變更歷史'],
     );
   });

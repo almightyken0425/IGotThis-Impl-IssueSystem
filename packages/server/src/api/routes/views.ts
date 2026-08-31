@@ -369,6 +369,17 @@ async function collectContainerIssues(
   return issues;
 }
 
+async function collectMgmtIssues(pool: Pool, companyId: string, mgmtIds: readonly string[]): Promise<Issue[]> {
+  const issues: Issue[] = [];
+  for (const mgmtId of new Set(mgmtIds)) {
+    const issueSets = await containerRepo.listIssueSetsByMgmt(companyId, mgmtId, pool);
+    for (const issueSet of issueSets) {
+      issues.push(...await issueRepo.listIssuesByIssueSet(companyId, issueSet.id, pool));
+    }
+  }
+  return issues;
+}
+
 /**
  * 查一帳號的權限判定素材：全部 Role bundle ＋ 容器歸屬索引，供 filterMgmtsByPermission
  * 判定讀取權。比照 permissions.ts 的 operatorBundles／loadContainerIndex，但那兩個是該檔
@@ -914,9 +925,9 @@ export const viewRoutes: FastifyPluginAsync<ViewRoutesOptions> = async (
         index,
       );
 
-      const containerIssues = await collectContainerIssues(pool, companyId, readableMgmtIds);
+      const containerIssues = await collectMgmtIssues(pool, companyId, readableMgmtIds);
       const permissionExcludedCount = (
-        await collectContainerIssues(pool, companyId, deniedMgmtIds)
+        await collectMgmtIssues(pool, companyId, deniedMgmtIds)
       ).length;
       const candidates = await buildFilterCandidates(pool, companyId, containerIssues);
       const { included, excludedIds } = applyViewFilter(candidates, parseFilterConfig(view.filterConfig));

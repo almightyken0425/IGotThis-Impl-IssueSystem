@@ -30,6 +30,7 @@ suite('container routes', () => {
     await pool.query('TRUNCATE companies CASCADE');
     session = await registerSession(app);
     call = authed(app, session.cookie);
+    await call({ method: 'GET', url: '/api/workspace' });
   });
 
   // ---- helpers ----
@@ -87,7 +88,7 @@ suite('container routes', () => {
     expect(created.json().team.companyId).toBe(session.companyId);
 
     const listed = await call({ method: 'GET', url: '/api/teams' });
-    expect(listed.json().teams).toHaveLength(1);
+    expect(listed.json().teams).toHaveLength(2);
 
     const got = await call({ method: 'GET', url: `/api/teams/${teamId}` });
     expect(got.statusCode).toBe(200);
@@ -285,8 +286,8 @@ suite('container routes', () => {
 
     // 列表只含自己租戶的 Team。
     const listed = await call({ method: 'GET', url: '/api/teams' });
-    expect(listed.json().teams).toHaveLength(1);
-    expect(listed.json().teams[0].name).toBe('MyTeam');
+    expect(listed.json().teams).toHaveLength(2);
+    expect(listed.json().teams).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'MyTeam' })]));
 
     // 直接以 id 取另一租戶的 Team 也不可見。
     const cross = await call({ method: 'GET', url: `/api/teams/${otherTeam}` });

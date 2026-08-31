@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 
-import type { FastifyInstance, FastifyPluginAsync, preHandlerHookHandler } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 import type { Pool } from 'pg';
 
 import { currentIdentity } from '../../auth/middleware.js';
 import { withTransaction } from '../../db/client.js';
-import { containerRepo } from '../../db/repositories/index.js';
+import { containerRepo, permissionRepo } from '../../db/repositories/index.js';
+import { buildContainerIndex, computeEffectivePermission } from '../../permission/index.js';
+import type { PermissionLocation } from '../../permission/index.js';
 import { validateIssueSetKey } from '../../domain/index.js';
 import { isUniqueViolation, sendError, sendValidationFailure } from '../errors.js';
 
@@ -33,7 +35,7 @@ const nameBodySchema = {
   type: 'object',
   required: ['name'],
   additionalProperties: false,
-  properties: { name: { type: 'string', minLength: 1, maxLength: 200 } },
+  properties: { name: { type: 'string', minLength: 1, maxLength: 200, pattern: '\\S' } },
 } as const;
 
 function idParams(key: string) {
@@ -57,6 +59,39 @@ export const containerRoutes: FastifyPluginAsync<ContainerRoutesOptions> = async
 
   // 全路由需登入；每條 handler 以 currentIdentity 取租戶鍵。
   app.addHook('preHandler', requireAuth);
+
+  async function canManage(request: FastifyRequest, reply: FastifyReply, location?: PermissionLocation) {
+    const { companyId, accountId } = currentIdentity(request);
+    const bundles = await permissionRepo.getEffectivePermissionInputs(pool, companyId, accountId);
+    const tree = await containerRepo.getContainerTree(companyId, pool);
+    const permission = computeEffectivePermission(
+      bundles, buildContainerIndex(tree ?? { id: companyId, name: '', teams: [] }), location,
+    );
+    if (location === undefined ? permission.orgAdmin : permission.canStructure) return true;
+    void sendError(reply, 403, 'FORBIDDEN', '沒有此組織範圍的管理權限');
+    return false;
+  }
+
+  app.get('/organization', async (request, reply) => {
+    const { companyId, accountId } = currentIdentity(request);
+    const tree = await containerRepo.getContainerTree(companyId, pool);
+    if (tree === undefined) return sendError(reply, 404, 'NOT_FOUND', '公司不存在');
+    const bundles = await permissionRepo.getEffectivePermissionInputs(pool, companyId, accountId);
+    const index = buildContainerIndex(tree);
+    const orgAdmin = computeEffectivePermission(bundles, index).orgAdmin;
+    const teams = tree.teams.map((team) => ({
+      ...team,
+      products: team.products.map((product) => ({
+        ...product,
+        canStructure: computeEffectivePermission(bundles, index, { kind: 'product', id: product.id }).canStructure,
+        mgmts: product.mgmts.map((mgmt) => ({
+          ...mgmt,
+          canStructure: computeEffectivePermission(bundles, index, { kind: 'mgmt', id: mgmt.id }).canStructure,
+        })),
+      })),
+    }));
+    return reply.send({ id: tree.id, name: tree.name, orgAdmin, teams });
+  });
 
   // ==========================================================
   // Company（鎖 session 當前租戶：讀取 + 改名）
@@ -93,8 +128,9 @@ export const containerRoutes: FastifyPluginAsync<ContainerRoutesOptions> = async
     { schema: { body: nameBodySchema } },
     async (request, reply) => {
       const { companyId } = currentIdentity(request);
+      if (!(await canManage(request, reply))) return reply;
       const team = await containerRepo.createTeam(
-        { id: randomUUID(), companyId, name: request.body.name },
+        { id: randomUUID(), companyId, name: request.body.name.trim() },
         pool,
       );
       return reply.status(201).send({ team });
@@ -125,10 +161,11 @@ export const containerRoutes: FastifyPluginAsync<ContainerRoutesOptions> = async
     { schema: { params: idParams('teamId'), body: nameBodySchema } },
     async (request, reply) => {
       const { companyId } = currentIdentity(request);
+      if (!(await canManage(request, reply))) return reply;
       const team = await containerRepo.renameTeam(
         companyId,
         request.params.teamId,
-        request.body.name,
+        request.body.name.trim(),
         pool,
       );
       if (team === undefined) {
@@ -165,7 +202,7 @@ export const containerRoutes: FastifyPluginAsync<ContainerRoutesOptions> = async
           additionalProperties: false,
           properties: {
             teamId: { type: 'string', pattern: UUID_PATTERN },
-            name: { type: 'string', minLength: 1, maxLength: 200 },
+            name: { type: 'string', minLength: 1, maxLength: 200, pattern: '\\S' },
           },
         },
       },
@@ -173,12 +210,13 @@ export const containerRoutes: FastifyPluginAsync<ContainerRoutesOptions> = async
     async (request, reply) => {
       const { companyId } = currentIdentity(request);
       // 引用的 Team 須在租戶內；products.team_id 外鍵非複合，故在此把關跨租戶引用。
+      if (!(await canManage(request, reply))) return reply;
       const team = await containerRepo.getTeam(companyId, request.body.teamId, pool);
       if (team === undefined) {
         return sendError(reply, 422, 'TEAM_NOT_FOUND', '指定的 Team 不存在');
       }
       const product = await containerRepo.createProduct(
-        { id: randomUUID(), companyId, teamId: request.body.teamId, name: request.body.name },
+        { id: randomUUID(), companyId, teamId: request.body.teamId, name: request.body.name.trim() },
         pool,
       );
       return reply.status(201).send({ product });
@@ -217,10 +255,11 @@ export const containerRoutes: FastifyPluginAsync<ContainerRoutesOptions> = async
     { schema: { params: idParams('productId'), body: nameBodySchema } },
     async (request, reply) => {
       const { companyId } = currentIdentity(request);
+      if (!(await canManage(request, reply))) return reply;
       const product = await containerRepo.renameProduct(
         companyId,
         request.params.productId,
-        request.body.name,
+        request.body.name.trim(),
         pool,
       );
       if (product === undefined) {
@@ -263,13 +302,13 @@ export const containerRoutes: FastifyPluginAsync<ContainerRoutesOptions> = async
           required: ['name', 'issueSet'],
           additionalProperties: false,
           properties: {
-            name: { type: 'string', minLength: 1, maxLength: 200 },
+            name: { type: 'string', minLength: 1, maxLength: 200, pattern: '\\S' },
             issueSet: {
               type: 'object',
               required: ['name', 'key'],
               additionalProperties: false,
               properties: {
-                name: { type: 'string', minLength: 1, maxLength: 200 },
+                name: { type: 'string', minLength: 1, maxLength: 200, pattern: '\\S' },
                 key: { type: 'string', minLength: 1, maxLength: 32 },
               },
             },
@@ -280,6 +319,7 @@ export const containerRoutes: FastifyPluginAsync<ContainerRoutesOptions> = async
     async (request, reply) => {
       const { companyId } = currentIdentity(request);
       const { name, issueSet } = request.body;
+      if (!(await canManage(request, reply, { kind: 'product', id: request.params.productId }))) return reply;
 
       // 工單集 KEY 格式檢查（長度、字元、不可數字開頭）；撞號由 DB 唯一約束兜底。
       const keyCheck = validateIssueSetKey({ key: issueSet.key, companyId, existingIssueSets: [] });
@@ -293,8 +333,8 @@ export const containerRoutes: FastifyPluginAsync<ContainerRoutesOptions> = async
           if (product === undefined) return undefined;
           return containerRepo.createMgmtWithInitialIssueSet(
             {
-              mgmt: { id: randomUUID(), companyId, productId: product.id, name },
-              issueSet: { id: randomUUID(), companyId, name: issueSet.name, key: issueSet.key },
+              mgmt: { id: randomUUID(), companyId, productId: product.id, name: name.trim() },
+              issueSet: { id: randomUUID(), companyId, name: issueSet.name.trim(), key: issueSet.key },
             },
             tx,
           );
@@ -340,10 +380,11 @@ export const containerRoutes: FastifyPluginAsync<ContainerRoutesOptions> = async
     { schema: { params: idParams('mgmtId'), body: nameBodySchema } },
     async (request, reply) => {
       const { companyId } = currentIdentity(request);
+      if (!(await canManage(request, reply, { kind: 'mgmt', id: request.params.mgmtId }))) return reply;
       const mgmt = await containerRepo.renameMgmt(
         companyId,
         request.params.mgmtId,
-        request.body.name,
+        request.body.name.trim(),
         pool,
       );
       if (mgmt === undefined) {
@@ -380,7 +421,7 @@ export const containerRoutes: FastifyPluginAsync<ContainerRoutesOptions> = async
           required: ['name', 'key'],
           additionalProperties: false,
           properties: {
-            name: { type: 'string', minLength: 1, maxLength: 200 },
+            name: { type: 'string', minLength: 1, maxLength: 200, pattern: '\\S' },
             key: { type: 'string', minLength: 1, maxLength: 32 },
           },
         },
@@ -389,6 +430,7 @@ export const containerRoutes: FastifyPluginAsync<ContainerRoutesOptions> = async
     async (request, reply) => {
       const { companyId } = currentIdentity(request);
       const { name, key } = request.body;
+      if (!(await canManage(request, reply, { kind: 'mgmt', id: request.params.mgmtId }))) return reply;
 
       const keyCheck = validateIssueSetKey({ key, companyId, existingIssueSets: [] });
       if (!keyCheck.ok) {
@@ -402,7 +444,7 @@ export const containerRoutes: FastifyPluginAsync<ContainerRoutesOptions> = async
 
       try {
         const issueSet = await containerRepo.createIssueSet(
-          { id: randomUUID(), companyId, mgmtId: mgmt.id, name, key },
+          { id: randomUUID(), companyId, mgmtId: mgmt.id, name: name.trim(), key },
           pool,
         );
         return reply.status(201).send({ issueSet });
@@ -447,10 +489,13 @@ export const containerRoutes: FastifyPluginAsync<ContainerRoutesOptions> = async
     { schema: { params: idParams('issueSetId'), body: nameBodySchema } },
     async (request, reply) => {
       const { companyId } = currentIdentity(request);
+      const existing = await containerRepo.getIssueSet(companyId, request.params.issueSetId, pool);
+      if (existing === undefined) return sendError(reply, 404, 'NOT_FOUND', '工單集不存在');
+      if (!(await canManage(request, reply, { kind: 'mgmt', id: existing.mgmtId }))) return reply;
       const issueSet = await containerRepo.renameIssueSet(
         companyId,
         request.params.issueSetId,
-        request.body.name,
+        request.body.name.trim(),
         pool,
       );
       if (issueSet === undefined) {

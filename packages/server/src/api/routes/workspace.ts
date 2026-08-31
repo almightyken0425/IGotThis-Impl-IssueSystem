@@ -5,7 +5,7 @@ import type { Pool } from 'pg';
 
 import { currentIdentity } from '../../auth/middleware.js';
 import { withTransaction } from '../../db/client.js';
-import { containerRepo, fieldRepo, issueRepo, permissionRepo } from '../../db/repositories/index.js';
+import { containerRepo, fieldRepo, issueRepo, permissionRepo, viewRepo } from '../../db/repositories/index.js';
 import type {
   Company,
   FieldDef,
@@ -15,6 +15,7 @@ import type {
   Role,
 } from '../../db/repositories/index.js';
 import type { Executor } from '../../db/repositories/index.js';
+import { buildContainerIndex, computeEffectivePermission } from '../../permission/index.js';
 import { changeIssueStatus, formatIssueKey, invalid, recordFieldChange } from '../../domain/index.js';
 import type {
   FieldChangeInput,
@@ -421,12 +422,17 @@ async function foldIssueRow(
 
 // ---- 輸入 schema ----
 
+const UUID_PATTERN =
+  '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$';
+
 const createIssueBodySchema = {
   type: 'object',
   required: ['title'],
   additionalProperties: false,
   properties: {
     title: { type: 'string', minLength: 1, maxLength: 500 },
+    issueSetId: { type: 'string', pattern: UUID_PATTERN },
+    issueTypeId: { type: 'string', pattern: UUID_PATTERN },
     status: { type: 'string', minLength: 1, maxLength: 100 },
     assignee: { type: 'string', maxLength: 100 },
     point: { type: 'number' },
@@ -447,9 +453,6 @@ const updateIssueBodySchema = {
   },
 } as const;
 
-const UUID_PATTERN =
-  '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$';
-
 const issueIdParams = {
   type: 'object',
   required: ['issueId'],
@@ -459,6 +462,8 @@ const issueIdParams = {
 
 interface CreateIssueBody {
   readonly title: string;
+  readonly issueSetId?: string;
+  readonly issueTypeId?: string;
   readonly status?: string;
   readonly assignee?: string;
   readonly point?: number;
@@ -491,6 +496,37 @@ export const workspaceRoutes: FastifyPluginAsync<WorkspaceRoutesOptions> = async
     return reply.status(200).send(context);
   });
 
+  app.get<{ Querystring: { viewId: string } }>('/creation-options', {
+    schema: { querystring: {
+      type: 'object', required: ['viewId'], additionalProperties: false,
+      properties: { viewId: { type: 'string', pattern: UUID_PATTERN } },
+    } },
+  }, async (request, reply) => {
+    const { companyId, accountId } = currentIdentity(request);
+    const view = await viewRepo.getView(pool, companyId, request.query.viewId);
+    if (view === undefined || view.ownerId !== accountId) {
+      return sendError(reply, 404, 'VIEW_NOT_FOUND', '檢視不存在');
+    }
+    const tree = await containerRepo.getContainerTree(companyId, pool);
+    const bundles = await permissionRepo.getEffectivePermissionInputs(pool, companyId, accountId);
+    const index = buildContainerIndex(tree ?? { id: companyId, name: '', teams: [] });
+    const sourceIds = new Set(view.sourceMgmtIds);
+    const issueSets: Array<{ id: string; label: string; key: string }> = [];
+    for (const team of tree?.teams ?? []) {
+      for (const product of team.products) {
+        for (const mgmt of product.mgmts) {
+          const permission = computeEffectivePermission(bundles, index, { kind: 'mgmt', id: mgmt.id });
+          if (!sourceIds.has(mgmt.id) || !permission.canCreate || !permission.canRead) continue;
+          for (const issueSet of mgmt.issueSets) {
+            issueSets.push({ id: issueSet.id, key: issueSet.key, label: `${team.name} / ${product.name} / ${mgmt.name} / ${issueSet.name} · ${issueSet.key}` });
+          }
+        }
+      }
+    }
+    const issueTypes = await issueRepo.listIssueTypes(companyId, pool);
+    return reply.send({ issueSets, issueTypes });
+  });
+
   // 加值工單列：工作區工單集下的工單摺疊欄位單值。
   app.get('/issues', async (request, reply) => {
     const { accountId, companyId } = currentIdentity(request);
@@ -511,17 +547,34 @@ export const workspaceRoutes: FastifyPluginAsync<WorkspaceRoutesOptions> = async
       const { accountId, companyId } = currentIdentity(request);
       const context = await ensureWorkspace(pool, companyId, accountId);
       const body = request.body;
+      const issueSet = await containerRepo.getIssueSet(companyId, body.issueSetId ?? context.issueSet.id, pool);
+      if (issueSet === undefined) {
+        return sendError(reply, 422, 'ISSUE_SET_NOT_FOUND', '指定的工單集不存在');
+      }
+      const issueType = await issueRepo.getIssueType(companyId, body.issueTypeId ?? context.issueType.id, pool);
+      if (issueType === undefined) {
+        return sendError(reply, 422, 'ISSUE_TYPE_NOT_FOUND', '指定的工單型別不存在');
+      }
+      const bundles = await permissionRepo.getEffectivePermissionInputs(pool, companyId, accountId);
+      const tree = await containerRepo.getContainerTree(companyId, pool);
+      const permission = computeEffectivePermission(
+        bundles, buildContainerIndex(tree ?? { id: companyId, name: '', teams: [] }),
+        { kind: 'mgmt', id: issueSet.mgmtId },
+      );
+      if (!permission.canCreate) {
+        return sendError(reply, 403, 'FORBIDDEN', '沒有此管理域的建單權限');
+      }
 
       const issue = await withTransaction(async (tx) => {
         const now = Date.now();
-        const seq = await containerRepo.takeNextSeq(companyId, context.issueSet.id, tx);
-        const issueKey = formatIssueKey(context.issueSet.key, seq!);
+        const seq = await containerRepo.takeNextSeq(companyId, issueSet.id, tx);
+        const issueKey = formatIssueKey(issueSet.key, seq!);
         const created = await issueRepo.createIssue(
           {
             id: randomUUID(),
             companyId,
-            issueSetId: context.issueSet.id,
-            issueTypeId: context.issueType.id,
+            issueSetId: issueSet.id,
+            issueTypeId: issueType.id,
             issueKey,
           },
           tx,
@@ -537,7 +590,7 @@ export const workspaceRoutes: FastifyPluginAsync<WorkspaceRoutesOptions> = async
         // 未帶 status 時落在該型別真正的起始狀態，不寫死中文字面值；
         // checkExactlyOneInitialState 保證每個型別恆有一個 isInitial，
         // DEFAULT_STATUS 只當資料異常時的防禦回退。
-        const workflowStates = await issueRepo.listWorkflowStates(companyId, context.issueType.id, tx);
+        const workflowStates = await issueRepo.listWorkflowStates(companyId, issueType.id, tx);
         const initialStatus = workflowStates.find((s) => s.isInitial)?.name ?? DEFAULT_STATUS;
         await setField(FIELD_STATUS, body.status ?? initialStatus);
         if (body.assignee !== undefined && body.assignee !== '') {

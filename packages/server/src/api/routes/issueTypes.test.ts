@@ -153,7 +153,12 @@ suite('issue type routes', () => {
         '已完成',
       ]);
       expect(body.transitions).toHaveLength(4);
-      expect(body.resolutionOptions.length).toBeGreaterThan(0);
+      expect(body.resolutionOptions.map(
+        ({ value, sortOrder }: { value: string; sortOrder: number }) => ({ value, sortOrder }),
+      )).toEqual([
+        { value: '已完成', sortOrder: 1 },
+        { value: '不做', sortOrder: 2 },
+      ]);
     });
 
     it('整包替換：新增一條帶 requiredRole／requiredFields 的轉換', async () => {
@@ -185,6 +190,47 @@ suite('issue type routes', () => {
 
       const reread = await call({ method: 'GET', url: `/api/issue-types/${id}/workflow` });
       expect(reread.json().states.map((s: { name: string }) => s.name)).toEqual(['待處理', '已關閉']);
+    });
+
+    it('多個結案原因依送出順序持久化且位置從一開始', async () => {
+      const id = await createType();
+      const saved = await call({
+        method: 'PUT',
+        url: `/api/issue-types/${id}/workflow`,
+        payload: {
+          states: [{ name: '待處理', isInitial: true, isTerminal: false }],
+          transitions: [],
+          resolutionOptions: [{ value: 'Zulu' }, { value: 'Alpha' }, { value: 'Mike' }],
+        },
+      });
+      expect(saved.statusCode).toBe(200);
+
+      const reread = await call({ method: 'GET', url: `/api/issue-types/${id}/workflow` });
+      expect(reread.json().resolutionOptions.map(
+        ({ value, sortOrder }: { value: string; sortOrder: number }) => ({ value, sortOrder }),
+      )).toEqual([
+        { value: 'Zulu', sortOrder: 1 },
+        { value: 'Alpha', sortOrder: 2 },
+        { value: 'Mike', sortOrder: 3 },
+      ]);
+
+      const reordered = await call({
+        method: 'PUT',
+        url: `/api/issue-types/${id}/workflow`,
+        payload: {
+          states: [{ name: '待處理', isInitial: true, isTerminal: false }],
+          transitions: [],
+          resolutionOptions: [{ value: 'Mike' }, { value: 'Zulu' }],
+        },
+      });
+      expect(reordered.statusCode).toBe(200);
+      const rereadReordered = await call({ method: 'GET', url: `/api/issue-types/${id}/workflow` });
+      expect(rereadReordered.json().resolutionOptions.map(
+        ({ value, sortOrder }: { value: string; sortOrder: number }) => ({ value, sortOrder }),
+      )).toEqual([
+        { value: 'Mike', sortOrder: 1 },
+        { value: 'Zulu', sortOrder: 2 },
+      ]);
     });
 
     it('起始狀態不是恰好一個回 422', async () => {

@@ -59,6 +59,7 @@ interface ResolutionOptionRow {
   company_id: string;
   issue_type_id: string;
   value: string;
+  sort_order: number;
   system: boolean;
 }
 interface FieldValueRow {
@@ -113,6 +114,7 @@ function toResolutionOption(row: ResolutionOptionRow): ResolutionOption {
     companyId: row.company_id,
     issueTypeId: row.issue_type_id,
     value: row.value,
+    sortOrder: row.sort_order,
     system: row.system,
   };
 }
@@ -417,8 +419,8 @@ export async function listResolutionOptions(
 ): Promise<ResolutionOption[]> {
   const rows = await run<ResolutionOptionRow>(
     exec,
-    `SELECT company_id, issue_type_id, value, system
-     FROM resolution_options WHERE company_id = $1 AND issue_type_id = $2 ORDER BY value`,
+    `SELECT company_id, issue_type_id, value, sort_order, system
+     FROM resolution_options WHERE company_id = $1 AND issue_type_id = $2 ORDER BY sort_order`,
     [companyId, issueTypeId],
   );
   return rows.map(toResolutionOption);
@@ -439,9 +441,9 @@ export async function replaceResolutionOptions(
   for (const o of options) {
     await run(
       exec,
-      `INSERT INTO resolution_options (company_id, issue_type_id, value, system)
-       VALUES ($1, $2, $3, $4)`,
-      [companyId, issueTypeId, o.value, o.system],
+      `INSERT INTO resolution_options (company_id, issue_type_id, value, sort_order, system)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [companyId, issueTypeId, o.value, o.sortOrder, o.system],
     );
   }
   return listResolutionOptions(companyId, issueTypeId, exec);
@@ -512,7 +514,11 @@ export async function initializeTypeWorkflow(
       requiredRole,
       requiredFields,
     }));
-    resolutionInputs = sourceResolutions.map(({ value, system }) => ({ value, system }));
+    resolutionInputs = sourceResolutions.map(({ value, sortOrder, system }) => ({
+      value,
+      sortOrder,
+      system,
+    }));
   } else {
     stateInputs = DEFAULT_STATES.map((name, index) => ({
       name,
@@ -521,7 +527,11 @@ export async function initializeTypeWorkflow(
       isTerminal: index === DEFAULT_STATES.length - 1,
     }));
     transitionInputs = DEFAULT_TRANSITIONS;
-    resolutionInputs = DEFAULT_RESOLUTIONS.map((value) => ({ value, system: false }));
+    resolutionInputs = DEFAULT_RESOLUTIONS.map((value, index) => ({
+      value,
+      sortOrder: index + 1,
+      system: false,
+    }));
   }
 
   const states = await replaceWorkflowStates(companyId, issueTypeId, stateInputs, exec);

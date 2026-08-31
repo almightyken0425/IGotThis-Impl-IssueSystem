@@ -169,16 +169,18 @@ suite('issueRepo / 整合', () => {
         f.companyId,
         f.issueTypeId,
         [
-          { value: '已完成', system: true },
-          { value: '不做', system: true },
+          { value: '已完成', sortOrder: 1, system: true },
+          { value: '不做', sortOrder: 2, system: true },
         ],
         tx,
       );
-      // 值為中文，DB 定序未必等同程式碼點序，故比對集合而非精確順序。
-      expect(new Set(options.map((o) => o.value))).toEqual(new Set(['已完成', '不做']));
+      expect(options.map((o) => o.value)).toEqual(['已完成', '不做']);
 
       const read = await issueRepo.listResolutionOptions(f.companyId, f.issueTypeId, tx);
-      expect(read).toHaveLength(2);
+      expect(read.map(({ value, sortOrder }) => ({ value, sortOrder }))).toEqual([
+        { value: '已完成', sortOrder: 1 },
+        { value: '不做', sortOrder: 2 },
+      ]);
     });
   });
 
@@ -212,7 +214,10 @@ suite('issueRepo / 整合', () => {
 
       expect(copied.states.map((s) => s.name)).toEqual(['待處理', '處理中', '審查中', '已完成']);
       expect(copied.transitions).toHaveLength(4);
-      expect(new Set(copied.resolutionOptions.map((o) => o.value))).toEqual(new Set(['已完成', '不做']));
+      expect(copied.resolutionOptions.map(({ value, sortOrder }) => ({ value, sortOrder }))).toEqual([
+        { value: '已完成', sortOrder: 1 },
+        { value: '不做', sortOrder: 2 },
+      ]);
 
       // 複製後互相獨立：改來源不動複製結果。
       await issueRepo.replaceWorkflowStates(

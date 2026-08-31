@@ -180,7 +180,13 @@
     - 範圍縮減：狀態、轉換只做新增／移除，不做行內編輯表單（「編輯」走「先移除、再用新值新增」這條路徑）
     - 起始狀態（`isInitial`）已接進建工單邏輯：`POST /api/workspace/issues` 未帶 `status` 時查該型別實際的 `isInitial` 狀態落地，不再寫死 `DEFAULT_STATUS = '待處理'`（workspace.ts）；`DEFAULT_STATUS` 僅當資料異常查無起始狀態時的防禦回退
     - 已端到端驗證：補上本機 PostgreSQL 環境後跑滿整套整合測試（657 組），抓到並修掉三個先前被靜默略過測試掩蓋的真 bug——`replaceWorkflowStates`／`replaceWorkflowTransitions` 同交易內先刪 states 會撞外鍵（改 `workflow_transitions` 兩條 FK 為 `DEFERRABLE INITIALLY DEFERRED`，見 migration `003_defer_workflow_transition_fks.sql`）；`PUT /:id/workflow` 的 `states`／`resolutionOptions` 未依 wire schema 補上 `sortOrder`／`system` 就轉頭餵給 repo 層，導致整包替換必噴 500；Gantt 层級計算把「只有 Container 型別、無 Children 型別」誤判成「兩者皆缺」，第 1 層候選連帶交白卷
-    - 已知殘留：`resolution_options` 資料表沒有排序欄位，`listResolutionOptions` 用 `ORDER BY value` 字母序回傳，不保證跟 `DEFAULT_RESOLUTIONS`／管理端送出的順序一致；要保序需另開主題補 `sort_order` 欄位（含 migration 與 API 契約變動），本輪未動
+    - 結案原因排序依儲存順序呈現
+        - `sortOrder` 從一開始
+        - 新建型別維持已完成、不做的預設順序
+        - 已部署的排序欄位遷移維持原樣
+        - 後續遷移補齊既有位置並保留相對順序
+        - 原位置相同時依選項值排序
+        - 過去未儲存的自訂順序無法還原
 - **view_layer：**
     - `resolveViewCalendar`／`computeIssueDuration`／`admitNewContainerIssue`／`applyViewFilter` 四個 domain 函式皆已接進 views.ts
     - 新單自動入表已完成，ListScreen 建單後自動 reload

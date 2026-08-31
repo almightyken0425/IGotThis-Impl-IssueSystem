@@ -115,6 +115,7 @@ export interface ResolutionOption {
   readonly companyId: string;
   readonly issueTypeId: string;
   readonly value: string;
+  readonly sortOrder: number;
   readonly system: boolean;
 }
 
